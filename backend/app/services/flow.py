@@ -1,0 +1,275 @@
+"""Conversation flow graph: schema, validation and traversal.
+
+A flow is a directed graph of nodes stored on ``VoiceAgent.flow_json``. The
+agent builder (design doc §4.1) edits it visually; the conversation engine
+interprets it at runtime.
+
+Shape::
+
+    {
+      "start_node": "greet",
+      "nodes": [
+        {"id": "greet", "type": "message", "text": "...", "next": "ask"},
+        {"id": "ask",   "type": "collect", "prompt": "...", "variable": "name",
+                        "next": "route"},
+        {"id": "route", "type": "intent_branch",
+                        "branches": {"book": "book_node"}, "default": "fallback"},
+        {"id": "book",  "type": "api_call", "url": "...", "method": "POST",
+                        "next": "confirm"},
+        {"id": "hand",  "type": "handoff", "channel": "whatsapp"},
+        {"id": "bye",   "type": "end", "disposition": "resolved"}
+      ]
+    }
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, Field, ValidationError as PydanticValidationError, model_validator
+
+from app.core.errors import ValidationError
+
+MAX_NODES = 200
+
+
+class NodeType(StrEnum):
+    MESSAGE = "message"
+    COLLECT = "collect"
+    INTENT_BRANCH = "intent_branch"
+    CONDITION = "condition"
+    API_CALL = "api_call"
+    HANDOFF = "handoff"
+    TRANSFER = "transfer"
+    END = "end"
+
+
+class _BaseNode(BaseModel):
+    id: Annotated[str, Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")]
+    label: str | None = None
+
+
+class MessageNode(_BaseNode):
+    """Speak a line, then continue."""
+
+    type: Literal[NodeType.MESSAGE] = NodeType.MESSAGE
+    text: Annotated[str, Field(min_length=1, max_length=2000)]
+    next: str | None = None
+
+
+class CollectNode(_BaseNode):
+    """Ask a question and store the caller's answer in a flow variable."""
+
+    type: Literal[NodeType.COLLECT] = NodeType.COLLECT
+    prompt: Annotated[str, Field(min_length=1, max_length=2000)]
+    variable: Annotated[str, Field(min_length=1, max_length=60, pattern=r"^[a-z][a-z0-9_]*$")]
+    #: One of: text, number, phone, date, time, email, yes_no
+    expects: str = "text"
+    max_retries: Annotated[int, Field(ge=0, le=5)] = 2
+    next: str | None = None
+
+
+class IntentBranchNode(_BaseNode):
+    """Route on the intent classified from the caller's last utterance."""
+
+    type: Literal[NodeType.INTENT_BRANCH] = NodeType.INTENT_BRANCH
+    branches: dict[str, str] = Field(default_factory=dict)
+    default: str | None = None
+
+    @model_validator(mode="after")
+    def _needs_a_route(self) -> IntentBranchNode:
+        if not self.branches and not self.default:
+            raise ValueError("intent_branch needs at least one branch or a default.")
+        return self
+
+
+class ConditionNode(_BaseNode):
+    """Branch on a previously collected variable."""
+
+    type: Literal[NodeType.CONDITION] = NodeType.CONDITION
+    variable: Annotated[str, Field(min_length=1, max_length=60)]
+    #: One of: eq, neq, gt, gte, lt, lte, contains, exists
+    operator: str = "eq"
+    value: Any = None
+    if_true: str | None = None
+    if_false: str | None = None
+
+
+class ApiCallNode(_BaseNode):
+    """Call a business system (CRM, calendar) mid-conversation."""
+
+    type: Literal[NodeType.API_CALL] = NodeType.API_CALL
+    url: Annotated[str, Field(min_length=1, max_length=500)]
+    method: Literal["GET", "POST", "PUT", "PATCH"] = "POST"
+    headers: dict[str, str] = Field(default_factory=dict)
+    body_template: dict[str, Any] = Field(default_factory=dict)
+    #: Where to store the response, e.g. ``{"slot_id": "$.data.id"}``.
+    save_as: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: Annotated[float, Field(gt=0, le=15)] = 5.0
+    next: str | None = None
+    on_error: str | None = None
+
+    @model_validator(mode="after")
+    def _https_only(self) -> ApiCallNode:
+        if not self.url.startswith(("http://", "https://")):
+            raise ValueError("api_call url must be an absolute http(s) URL.")
+        return self
+
+
+class HandoffNode(_BaseNode):
+    """Escalate off the voice channel."""
+
+    type: Literal[NodeType.HANDOFF] = NodeType.HANDOFF
+    channel: Literal["whatsapp", "sms", "email"] = "whatsapp"
+    message: str | None = None
+    next: str | None = None
+
+
+class TransferNode(_BaseNode):
+    """Bridge the call to a human."""
+
+    type: Literal[NodeType.TRANSFER] = NodeType.TRANSFER
+    to_number: str | None = None
+    announcement: str | None = None
+
+
+class EndNode(_BaseNode):
+    type: Literal[NodeType.END] = NodeType.END
+    text: str | None = None
+    disposition: Literal["resolved", "unresolved", "escalated", "handed_off"] = "resolved"
+
+
+FlowNode = Annotated[
+    MessageNode
+    | CollectNode
+    | IntentBranchNode
+    | ConditionNode
+    | ApiCallNode
+    | HandoffNode
+    | TransferNode
+    | EndNode,
+    Field(discriminator="type"),
+]
+
+
+class ConversationFlow(BaseModel):
+    """A validated flow graph."""
+
+    start_node: Annotated[str, Field(min_length=1, max_length=80)]
+    nodes: Annotated[list[FlowNode], Field(min_length=1, max_length=MAX_NODES)]
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _validate_graph(self) -> ConversationFlow:
+        ids = [node.id for node in self.nodes]
+        duplicates = {i for i in ids if ids.count(i) > 1}
+        if duplicates:
+            raise ValueError(f"Duplicate node ids: {', '.join(sorted(duplicates))}")
+        known = set(ids)
+        if self.start_node not in known:
+            raise ValueError(f"start_node '{self.start_node}' is not a defined node.")
+
+        dangling: list[str] = [
+            f"{node.id} -> {target}"
+            for node in self.nodes
+            for target in outgoing_edges(node)
+            if target not in known
+        ]
+        if dangling:
+            raise ValueError(f"Edges point at unknown nodes: {', '.join(sorted(dangling))}")
+
+        unreachable = known - _reachable_from(self.start_node, self.node_map)
+        if unreachable:
+            raise ValueError(f"Unreachable nodes: {', '.join(sorted(unreachable))}")
+        return self
+
+    @property
+    def node_map(self) -> dict[str, Any]:
+        return {node.id: node for node in self.nodes}
+
+    def get_node(self, node_id: str):
+        return self.node_map.get(node_id)
+
+    def terminal_node_ids(self) -> set[str]:
+        return {n.id for n in self.nodes if n.type in (NodeType.END, NodeType.TRANSFER)}
+
+
+def outgoing_edges(node) -> list[str]:
+    """All node ids this node can move to."""
+    edges: list[str] = []
+    for attr in ("next", "default", "if_true", "if_false", "on_error"):
+        target = getattr(node, attr, None)
+        if target:
+            edges.append(target)
+    branches = getattr(node, "branches", None)
+    if branches:
+        edges.extend(branches.values())
+    return edges
+
+
+def _reachable_from(start: str, node_map: dict[str, Any]) -> set[str]:
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        current = stack.pop()
+        if current in seen or current not in node_map:
+            continue
+        seen.add(current)
+        stack.extend(outgoing_edges(node_map[current]))
+    return seen
+
+
+def validate_flow(flow_json: dict | None) -> ConversationFlow | None:
+    """Parse and validate a flow, translating pydantic errors into API errors.
+
+    An empty or absent flow is allowed — a draft agent may have no flow yet, and
+    the conversation engine falls back to purely LLM-driven dialogue.
+    """
+    if not flow_json:
+        return None
+    try:
+        return ConversationFlow.model_validate(flow_json)
+    except PydanticValidationError as exc:
+        raise ValidationError(
+            "Conversation flow is invalid.",
+            details={"errors": [_describe(e) for e in exc.errors()]},
+        ) from exc
+
+
+def _describe(error: dict) -> dict:
+    return {
+        "location": ".".join(str(part) for part in error.get("loc", ())),
+        "message": error.get("msg", "invalid"),
+        "type": error.get("type", "value_error"),
+    }
+
+
+def default_flow(greeting: str, use_case: str = "customer_support") -> dict:
+    """A minimal three-node starter flow used when an agent is created bare."""
+    return {
+        "start_node": "greeting",
+        "nodes": [
+            {"id": "greeting", "type": "message", "text": greeting, "next": "listen"},
+            {
+                "id": "listen",
+                "type": "collect",
+                "prompt": "How may I help you today?",
+                "variable": "caller_request",
+                "next": "route",
+            },
+            {
+                "id": "route",
+                "type": "intent_branch",
+                "branches": {},
+                "default": "wrap_up",
+            },
+            {
+                "id": "wrap_up",
+                "type": "end",
+                "text": "Thank you for calling. Have a good day!",
+                "disposition": "resolved",
+            },
+        ],
+        "variables": {"use_case": use_case},
+    }
