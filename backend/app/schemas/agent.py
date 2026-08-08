@@ -55,9 +55,9 @@ class VoiceAgentUpdate(BaseModel):
     greeting: Annotated[str | None, Field(default=None, max_length=2000)] = None
     fallback_message: Annotated[str | None, Field(default=None, max_length=2000)] = None
     max_call_duration_sec: Annotated[int | None, Field(default=None, ge=30, le=3600)] = None
-    handoff_confidence_threshold: Annotated[
-        float | None, Field(default=None, ge=0.0, le=1.0)
-    ] = None
+    handoff_confidence_threshold: Annotated[float | None, Field(default=None, ge=0.0, le=1.0)] = (
+        None
+    )
     whatsapp_handoff_enabled: bool | None = None
     recording_enabled: bool | None = None
 

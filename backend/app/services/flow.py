@@ -27,7 +27,8 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError as PydanticValidationError, model_validator
+from pydantic import BaseModel, Field, model_validator
+from pydantic import ValidationError as PydanticValidationError
 
 from app.core.errors import ValidationError
 

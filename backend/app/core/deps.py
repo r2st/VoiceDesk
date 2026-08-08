@@ -32,9 +32,7 @@ class TenantContext:
 
     def require_role(self, *allowed: UserRole) -> None:
         if self.role not in allowed:
-            raise PermissionError_(
-                f"Role '{self.role}' is not permitted to perform this action."
-            )
+            raise PermissionError_(f"Role '{self.role}' is not permitted to perform this action.")
 
 
 async def get_current_context(
@@ -85,9 +83,7 @@ def require_roles(*allowed: UserRole):
 
 
 #: Roles permitted to mutate configuration (agents, numbers, settings).
-RequireAdmin = Annotated[
-    TenantContext, Depends(require_roles(UserRole.OWNER, UserRole.ADMIN))
-]
+RequireAdmin = Annotated[TenantContext, Depends(require_roles(UserRole.OWNER, UserRole.ADMIN))]
 #: Roles permitted to operate calls (includes supervisors).
 RequireOperator = Annotated[
     TenantContext,

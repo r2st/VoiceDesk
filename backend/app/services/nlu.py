@@ -31,18 +31,57 @@ MARATHI_MARKERS = ("आहे", "नाही", "काय", "तुम्ही
 
 #: Romanised Hindi/Hinglish, very common on Indian phone calls.
 HINGLISH_MARKERS = (
-    "kya", "hai", "nahi", "haan", "aap", "mera", "meri", "karo", "chahiye",
-    "kitna", "kaise", "bhai", "theek", "acha", "batao", "kab",
+    "kya",
+    "hai",
+    "nahi",
+    "haan",
+    "aap",
+    "mera",
+    "meri",
+    "karo",
+    "chahiye",
+    "kitna",
+    "kaise",
+    "bhai",
+    "theek",
+    "acha",
+    "batao",
+    "kab",
 )
 
 POSITIVE_MARKERS = (
-    "thank", "thanks", "great", "good", "perfect", "excellent", "happy",
-    "dhanyavaad", "shukriya", "badhiya", "accha", "theek hai", "बढ़िया", "धन्यवाद",
+    "thank",
+    "thanks",
+    "great",
+    "good",
+    "perfect",
+    "excellent",
+    "happy",
+    "dhanyavaad",
+    "shukriya",
+    "badhiya",
+    "accha",
+    "theek hai",
+    "बढ़िया",
+    "धन्यवाद",
 )
 NEGATIVE_MARKERS = (
-    "angry", "terrible", "worst", "useless", "not working", "complaint", "refund",
-    "cheated", "frustrated", "disappointed", "bakwas", "ganda", "गलत", "बकवास",
-    "शिकायत", "पैसे वापस",
+    "angry",
+    "terrible",
+    "worst",
+    "useless",
+    "not working",
+    "complaint",
+    "refund",
+    "cheated",
+    "frustrated",
+    "disappointed",
+    "bakwas",
+    "ganda",
+    "गलत",
+    "बकवास",
+    "शिकायत",
+    "पैसे वापस",
 )
 
 
@@ -131,7 +170,7 @@ async def detect_language(
                     role="system",
                     content=(
                         "You identify the language of a phone-call utterance. "
-                        f"Answer with JSON: {{\"language\": one of [{options}], "
+                        f'Answer with JSON: {{"language": one of [{options}], '
                         '"confidence": 0.0-1.0}. Romanised Hindi (Hinglish) is "hi".'
                     ),
                 ),

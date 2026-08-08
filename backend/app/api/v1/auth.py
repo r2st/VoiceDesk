@@ -122,9 +122,7 @@ async def list_users(context: CurrentContext, session: DbSession) -> list[UserOu
 
 
 @router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-async def create_user(
-    payload: UserCreate, context: RequireAdmin, session: DbSession
-) -> UserOut:
+async def create_user(payload: UserCreate, context: RequireAdmin, session: DbSession) -> UserOut:
     user = await auth_service.create_user(session, context.business_id, payload)
     return UserOut.model_validate(user)
 
@@ -138,8 +136,6 @@ async def update_user(
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_user(
-    user_id: uuid.UUID, context: RequireAdmin, session: DbSession
-) -> Response:
+async def delete_user(user_id: uuid.UUID, context: RequireAdmin, session: DbSession) -> Response:
     await auth_service.soft_delete_user(session, context.business_id, user_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

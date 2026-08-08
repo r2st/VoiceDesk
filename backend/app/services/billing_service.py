@@ -19,7 +19,7 @@ from app.models.analytics import BillingUsage
 from app.models.business import Business
 from app.models.call import CallLog, PhoneNumber
 from app.models.enums import CallStatus, PhoneNumberStatus, PlanTier
-from app.services.plans import Plan, apply_gst, get_plan
+from app.services.plans import apply_gst, get_plan
 
 logger = get_logger(__name__)
 
@@ -166,16 +166,12 @@ def month_bounds(month: str) -> tuple[datetime, datetime]:
     year, mon = (int(part) for part in month.split("-"))
     start_local = datetime(year, mon, 1, tzinfo=tz)
     end_local = (
-        datetime(year + 1, 1, 1, tzinfo=tz)
-        if mon == 12
-        else datetime(year, mon + 1, 1, tzinfo=tz)
+        datetime(year + 1, 1, 1, tzinfo=tz) if mon == 12 else datetime(year, mon + 1, 1, tzinfo=tz)
     )
     return start_local.astimezone(UTC), end_local.astimezone(UTC)
 
 
-async def finalize_month(
-    session: AsyncSession, business_id: uuid.UUID, month: str
-) -> BillingUsage:
+async def finalize_month(session: AsyncSession, business_id: uuid.UUID, month: str) -> BillingUsage:
     """Close a billing cycle and assign an invoice number. Idempotent."""
     usage = await recalculate_usage(session, business_id, month)
     if usage.is_finalized:
@@ -192,9 +188,7 @@ async def list_usage(
     session: AsyncSession, business_id: uuid.UUID, *, limit: int = 12
 ) -> list[BillingUsage]:
     result = await session.execute(
-        tenant_select(BillingUsage, business_id)
-        .order_by(BillingUsage.month.desc())
-        .limit(limit)
+        tenant_select(BillingUsage, business_id).order_by(BillingUsage.month.desc()).limit(limit)
     )
     return list(result.scalars().all())
 

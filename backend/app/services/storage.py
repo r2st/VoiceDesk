@@ -48,9 +48,7 @@ def _encryption_key() -> bytes:
     configured = settings.recording_encryption_key
     if not configured:
         if settings.is_production:
-            raise ExternalServiceError(
-                "RECORDING_ENCRYPTION_KEY must be set in production."
-            )
+            raise ExternalServiceError("RECORDING_ENCRYPTION_KEY must be set in production.")
         # Development fallback: deterministic key derived from the JWT secret.
         configured = f"dev-recording-key:{settings.jwt_secret}"
 

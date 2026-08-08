@@ -132,9 +132,7 @@ async def list_agents(
     if search:
         stmt = stmt.where(VoiceAgent.name.ilike(f"%{search}%"))
 
-    total = await session.scalar(
-        select(func.count()).select_from(stmt.order_by(None).subquery())
-    )
+    total = await session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery()))
     result = await session.execute(
         stmt.order_by(VoiceAgent.created_at.desc()).limit(limit).offset(offset)
     )

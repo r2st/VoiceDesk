@@ -22,7 +22,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
 from app.db.types import GUID, JSONBType
 from app.models.enums import (
-    CallDirection,
     CallResolution,
     CallStatus,
     HandoffStatus,

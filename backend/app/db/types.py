@@ -10,7 +10,8 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import CHAR, JSON, TypeDecorator
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PGUUID
 
 
 class GUID(TypeDecorator):

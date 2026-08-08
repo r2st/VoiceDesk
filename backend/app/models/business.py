@@ -66,9 +66,7 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
 
     business: Mapped[Business] = relationship(back_populates="users", lazy="joined")
 
-    __table_args__ = (
-        UniqueConstraint("business_id", "email", name="uq_users_business_id_email"),
-    )
+    __table_args__ = (UniqueConstraint("business_id", "email", name="uq_users_business_id_email"),)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<User {self.id} role={self.role}>"

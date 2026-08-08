@@ -81,9 +81,7 @@ async def rollup_day(
     row.outbound_calls = sum(1 for c in calls if c.direction == CallDirection.OUTBOUND)
     row.answered_calls = len(answered)
     row.failed_calls = sum(
-        1
-        for c in calls
-        if c.status in (CallStatus.FAILED, CallStatus.NO_ANSWER, CallStatus.BUSY)
+        1 for c in calls if c.status in (CallStatus.FAILED, CallStatus.NO_ANSWER, CallStatus.BUSY)
     )
     row.total_duration_sec = sum(durations)
     row.avg_duration_sec = round(sum(durations) / len(durations), 2) if durations else 0.0
@@ -96,9 +94,7 @@ async def rollup_day(
     row.positive_sentiment = sum(1 for c in calls if c.sentiment == Sentiment.POSITIVE)
     row.neutral_sentiment = sum(1 for c in calls if c.sentiment == Sentiment.NEUTRAL)
     row.negative_sentiment = sum(1 for c in calls if c.sentiment == Sentiment.NEGATIVE)
-    row.avg_confidence = (
-        round(sum(confidences) / len(confidences), 4) if confidences else 0.0
-    )
+    row.avg_confidence = round(sum(confidences) / len(confidences), 4) if confidences else 0.0
     row.language_breakdown = dict(languages)
     row.intent_breakdown = dict(intents)
     row.deleted_at = None
@@ -166,9 +162,7 @@ async def dashboard_summary(
         **current,
         "deltas": {
             "total_calls": _pct_change(current["total_calls"], previous["total_calls"]),
-            "resolution_rate": round(
-                current["resolution_rate"] - previous["resolution_rate"], 4
-            ),
+            "resolution_rate": round(current["resolution_rate"] - previous["resolution_rate"], 4),
             "avg_duration_sec": _pct_change(
                 current["avg_duration_sec"], previous["avg_duration_sec"]
             ),
@@ -306,9 +300,7 @@ async def agent_leaderboard(
 
     names = {
         agent.id: agent.name
-        for agent in (
-            await session.execute(tenant_select(VoiceAgent, business_id))
-        ).scalars().all()
+        for agent in (await session.execute(tenant_select(VoiceAgent, business_id))).scalars().all()
     }
 
     leaderboard = []

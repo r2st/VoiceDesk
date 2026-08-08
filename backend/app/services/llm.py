@@ -92,9 +92,7 @@ class OpenRouterClient:
                 "OPENROUTER_API_KEY is not configured; cannot reach the LLM."
             )
 
-        payload_messages = [
-            m.to_dict() if isinstance(m, LLMMessage) else m for m in messages
-        ]
+        payload_messages = [m.to_dict() if isinstance(m, LLMMessage) else m for m in messages]
         chain = models or self.models
         if not chain:
             raise ExternalServiceError("No OpenRouter models are configured.")

@@ -101,9 +101,7 @@ class ExotelProvider(TelephonyProvider):
         )
 
     async def hangup(self, provider_call_id: str) -> bool:
-        await self._request(
-            "POST", f"/Calls/{provider_call_id}.json", data={"Status": "completed"}
-        )
+        await self._request("POST", f"/Calls/{provider_call_id}.json", data={"Status": "completed"})
         return True
 
     async def provision_number(

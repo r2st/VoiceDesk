@@ -118,9 +118,7 @@ async def duplicate_agent(
 
 
 @router.delete("/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_agent(
-    agent_id: uuid.UUID, context: RequireAdmin, session: DbSession
-) -> Response:
+async def delete_agent(agent_id: uuid.UUID, context: RequireAdmin, session: DbSession) -> Response:
     """Soft delete — the row is retained with ``deleted_at`` set."""
     await agent_service.soft_delete_agent(session, context.business_id, agent_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

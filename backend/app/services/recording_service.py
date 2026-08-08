@@ -148,9 +148,7 @@ async def load_audio(
     if recording.checksum_sha256:
         digest = hashlib.sha256(audio).hexdigest()
         if digest != recording.checksum_sha256:
-            logger.error(
-                "Checksum mismatch for recording %s (call %s)", recording.id, call_id
-            )
+            logger.error("Checksum mismatch for recording %s (call %s)", recording.id, call_id)
             raise ConflictError("Recording failed its integrity check.")
     return audio, recording
 
@@ -165,6 +163,30 @@ async def list_recordings(
         .offset(offset)
     )
     return list(result.scalars().all())
+
+
+async def purge_recording(
+    session: AsyncSession,
+    recording: CallRecording,
+    *,
+    now: datetime | None = None,
+    storage: StorageService | None = None,
+) -> bool:
+    """Delete one recording's audio ahead of its retention date.
+
+    The metadata row is kept (soft deleted, ``purged_at`` set) so the audit
+    trail still shows that a recording existed.
+    """
+    if recording.purged_at is not None:
+        return False
+    moment = now or datetime.now(UTC)
+    service = storage or get_storage()
+    service.delete(recording.storage_path)
+    recording.purged_at = moment
+    recording.deleted_at = moment
+    await session.flush()
+    logger.info("Purged recording %s (call %s)", recording.id, recording.call_id)
+    return True
 
 
 async def purge_expired(

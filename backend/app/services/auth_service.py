@@ -211,9 +211,7 @@ async def revoke_all_for_user(session: AsyncSession, user_id: uuid.UUID) -> int:
 # --------------------------------------------------------------------------- #
 # Team management
 # --------------------------------------------------------------------------- #
-async def create_user(
-    session: AsyncSession, business_id: uuid.UUID, payload: UserCreate
-) -> User:
+async def create_user(session: AsyncSession, business_id: uuid.UUID, payload: UserCreate) -> User:
     existing = await session.execute(
         tenant_select(User, business_id).where(func.lower(User.email) == payload.email.lower())
     )

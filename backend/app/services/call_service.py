@@ -75,9 +75,7 @@ async def initiate_call(
 
     if not decision.allowed:
         call.status = (
-            CallStatus.BLOCKED_DND
-            if decision.code == "dnd_blocked"
-            else CallStatus.BLOCKED_HOURS
+            CallStatus.BLOCKED_DND if decision.code == "dnd_blocked" else CallStatus.BLOCKED_HOURS
         )
         call.resolution = CallResolution.UNRESOLVED
         call.error_code = decision.code
@@ -207,7 +205,7 @@ async def handle_inbound_call(
             )
         ).scalar_one_or_none()
 
-    existing = await _find_by_provider_call_id(session, provider, provider_call_id)
+    existing = await find_by_provider_call_id(session, provider, provider_call_id)
     if existing is not None:
         return existing, agent
 
@@ -248,9 +246,7 @@ async def apply_webhook_event(
         )
         return None, False
 
-    if call.status == event.status.value and call.status not in {
-        s.value for s in NON_TERMINAL
-    }:
+    if call.status == event.status.value and call.status not in {s.value for s in NON_TERMINAL}:
         return call, True
 
     # Never move a call backwards out of a terminal state.
@@ -289,9 +285,7 @@ async def apply_webhook_event(
     return call, False
 
 
-async def _locate_call(
-    session: AsyncSession, event: WebhookEvent, provider: str
-) -> CallLog | None:
+async def _locate_call(session: AsyncSession, event: WebhookEvent, provider: str) -> CallLog | None:
     """Find the call by our own id first, then by the provider's."""
     if event.call_id:
         try:
@@ -301,11 +295,11 @@ async def _locate_call(
         except (ValueError, AttributeError):
             pass
     if event.provider_call_id:
-        return await _find_by_provider_call_id(session, provider, event.provider_call_id)
+        return await find_by_provider_call_id(session, provider, event.provider_call_id)
     return None
 
 
-async def _find_by_provider_call_id(
+async def find_by_provider_call_id(
     session: AsyncSession, provider: str, provider_call_id: str
 ) -> CallLog | None:
     if not provider_call_id:
@@ -334,9 +328,7 @@ def _derive_duration(call: CallLog, ended_at: datetime) -> int:
 # --------------------------------------------------------------------------- #
 # Queries and lifecycle
 # --------------------------------------------------------------------------- #
-async def get_call(
-    session: AsyncSession, business_id: uuid.UUID, call_id: uuid.UUID
-) -> CallLog:
+async def get_call(session: AsyncSession, business_id: uuid.UUID, call_id: uuid.UUID) -> CallLog:
     return await get_owned_or_404(session, CallLog, call_id, business_id, label="Call")
 
 
@@ -370,9 +362,7 @@ async def list_calls(
     if date_to is not None:
         stmt = stmt.where(CallLog.created_at < date_to)
 
-    total = await session.scalar(
-        select(func.count()).select_from(stmt.order_by(None).subquery())
-    )
+    total = await session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery()))
     result = await session.execute(
         stmt.order_by(CallLog.created_at.desc()).limit(limit).offset(offset)
     )

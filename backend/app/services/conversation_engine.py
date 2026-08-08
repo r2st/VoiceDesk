@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -398,9 +398,7 @@ class ConversationEngine:
                     headers=node.headers or None,
                 )
             if response.status_code >= 400:
-                logger.warning(
-                    "api_call node %s returned HTTP %s", node.id, response.status_code
-                )
+                logger.warning("api_call node %s returned HTTP %s", node.id, response.status_code)
                 return False
             payload = response.json() if response.content else {}
         except Exception as exc:
@@ -438,9 +436,7 @@ class ConversationEngine:
             messages.append(LLMMessage(role="user", content=utterance))
 
         try:
-            response = await self.llm.chat(
-                messages, temperature=0.5, max_tokens=MAX_REPLY_TOKENS
-            )
+            response = await self.llm.chat(messages, temperature=0.5, max_tokens=MAX_REPLY_TOKENS)
         except Exception as exc:
             logger.warning("LLM reply failed for call %s: %s", call.id, exc)
             fallback = agent.fallback_message or _localised(
@@ -622,9 +618,7 @@ class ConversationEngine:
         call.summary = summary
         call.sentiment = overall.value
         call.sentiment_score = round(average, 3)
-        call.avg_confidence = (
-            round(sum(confidences) / len(confidences), 3) if confidences else None
-        )
+        call.avg_confidence = round(sum(confidences) / len(confidences), 3) if confidences else None
         await session.flush()
         return summary, overall, average
 
