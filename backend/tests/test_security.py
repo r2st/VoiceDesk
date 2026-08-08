@@ -51,9 +51,7 @@ class TestPasswords:
 class TestTokens:
     def test_access_token_round_trip(self):
         user_id, business_id = uuid.uuid4(), uuid.uuid4()
-        token, expires = create_access_token(
-            user_id=user_id, business_id=business_id, role="owner"
-        )
+        token, expires = create_access_token(user_id=user_id, business_id=business_id, role="owner")
         payload = decode_token(token, expected_type="access")
 
         assert payload["sub"] == str(user_id)

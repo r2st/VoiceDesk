@@ -121,13 +121,9 @@ class FakeWhatsAppProvider(WhatsAppProvider):
     async def send(self, message: WhatsAppMessage) -> WhatsAppResult:
         self.sent.append(message)
         if self.fail:
-            return WhatsAppResult(
-                message_id="", accepted=False, error="injected provider failure"
-            )
+            return WhatsAppResult(message_id="", accepted=False, error="injected provider failure")
         self.counter += 1
-        return WhatsAppResult(
-            message_id=f"fake-wa-{self.counter}", accepted=True, raw={"ok": True}
-        )
+        return WhatsAppResult(message_id=f"fake-wa-{self.counter}", accepted=True, raw={"ok": True})
 
 
 class FakeLLMClient:
@@ -157,9 +153,7 @@ class FakeLLMClient:
         models: list[str] | None = None,
         response_format: dict | None = None,
     ) -> LLMResponse:
-        self.calls.append(
-            [m.to_dict() if isinstance(m, LLMMessage) else m for m in messages]
-        )
+        self.calls.append([m.to_dict() if isinstance(m, LLMMessage) else m for m in messages])
         if self.raise_error:
             from app.core.errors import ExternalServiceError
 
@@ -184,9 +178,7 @@ class FakeLLMClient:
         max_tokens: int = 400,
         models: list[str] | None = None,
     ) -> dict:
-        self.calls.append(
-            [m.to_dict() if isinstance(m, LLMMessage) else m for m in messages]
-        )
+        self.calls.append([m.to_dict() if isinstance(m, LLMMessage) else m for m in messages])
         if self.raise_error:
             from app.core.errors import ExternalServiceError
 

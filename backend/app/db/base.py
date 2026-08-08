@@ -20,6 +20,12 @@ NAMING_CONVENTION = {
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
+    #: Fetch server-generated columns (``created_at``/``updated_at``) inline via
+    #: RETURNING instead of expiring them. Without this, reading ``updated_at``
+    #: after a flush needs a lazy round trip, which raises ``MissingGreenlet``
+    #: under asyncio when a response model is serialised from the ORM object.
+    __mapper_args__ = {"eager_defaults": True}
+
 
 def new_uuid() -> uuid.UUID:
     return uuid.uuid4()

@@ -28,9 +28,7 @@ class TestTenantSelect:
             )
         await session.flush()
 
-        rows = (
-            (await session.execute(tenant_select(VoiceAgent, business.id))).scalars().all()
-        )
+        rows = (await session.execute(tenant_select(VoiceAgent, business.id))).scalars().all()
         assert [r.name for r in rows] == ["Mine"]
 
     async def test_excludes_soft_deleted_rows_by_default(self, session, business):
@@ -47,11 +45,7 @@ class TestTenantSelect:
 
         assert (await session.execute(tenant_select(VoiceAgent, business.id))).scalars().all() == []
         included = (
-            (
-                await session.execute(
-                    tenant_select(VoiceAgent, business.id, include_deleted=True)
-                )
-            )
+            (await session.execute(tenant_select(VoiceAgent, business.id, include_deleted=True)))
             .scalars()
             .all()
         )
@@ -107,9 +101,7 @@ class TestHttpIsolation:
         self, client, session, agent, other_business, other_headers, owner_headers
     ):
         session.add(
-            VoiceAgent(
-                business_id=other_business.id, name="Rival Agent", persona="", flow_json={}
-            )
+            VoiceAgent(business_id=other_business.id, name="Rival Agent", persona="", flow_json={})
         )
         await session.flush()
 
@@ -119,16 +111,12 @@ class TestHttpIsolation:
         assert [a["name"] for a in mine.json()["items"]] == ["Reception Agent"]
         assert [a["name"] for a in theirs.json()["items"]] == ["Rival Agent"]
 
-    async def test_cross_tenant_agent_fetch_returns_404(
-        self, client, agent, other_headers
-    ):
+    async def test_cross_tenant_agent_fetch_returns_404(self, client, agent, other_headers):
         response = await client.get(f"/api/v1/agents/{agent.id}", headers=other_headers)
         assert response.status_code == 404
         assert response.json()["error"]["code"] == "not_found"
 
-    async def test_cross_tenant_agent_update_returns_404(
-        self, client, agent, other_headers
-    ):
+    async def test_cross_tenant_agent_update_returns_404(self, client, agent, other_headers):
         response = await client.patch(
             f"/api/v1/agents/{agent.id}", headers=other_headers, json={"name": "Hijacked"}
         )
@@ -154,9 +142,7 @@ class TestHttpIsolation:
         token, _ = create_access_token(
             user_id=owner.id, business_id=other_business.id, role=owner.role
         )
-        response = await client.get(
-            "/api/v1/agents", headers={"Authorization": f"Bearer {token}"}
-        )
+        response = await client.get("/api/v1/agents", headers={"Authorization": f"Bearer {token}"})
         assert response.status_code == 401
         assert "does not match" in response.json()["error"]["message"]
 

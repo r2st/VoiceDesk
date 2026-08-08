@@ -88,9 +88,7 @@ class TestDNDRegistry:
         assert first.id == second.id
         assert second.source == "dashboard"
 
-    async def test_check_can_be_disabled_by_configuration(
-        self, session, business, monkeypatch
-    ):
+    async def test_check_can_be_disabled_by_configuration(self, session, business, monkeypatch):
         session.add(DNDRegistry(business_id=None, phone_number="+919999900000", is_dnd=True))
         await session.flush()
 
@@ -132,9 +130,7 @@ class TestOutboundCheck:
         assert not decision.allowed
         assert decision.code == "dnd_blocked"
 
-    async def test_blocks_outside_calling_hours_and_suggests_the_next_slot(
-        self, session, business
-    ):
+    async def test_blocks_outside_calling_hours_and_suggests_the_next_slot(self, session, business):
         decision = await compliance.check_outbound_call(
             session,
             to_number="+919999900000",

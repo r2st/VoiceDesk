@@ -200,9 +200,7 @@ async def other_owner(session: AsyncSession, other_business: Business) -> User:
     return await _make_user(session, other_business, "owner@rival.test", UserRole.OWNER)
 
 
-async def _make_user(
-    session: AsyncSession, business: Business, email: str, role: UserRole
-) -> User:
+async def _make_user(session: AsyncSession, business: Business, email: str, role: UserRole) -> User:
     user = User(
         business_id=business.id,
         email=email,
@@ -235,9 +233,7 @@ async def agent(session: AsyncSession, business: Business) -> VoiceAgent:
 
 
 @pytest_asyncio.fixture
-async def phone_number(
-    session: AsyncSession, business: Business, agent: VoiceAgent
-) -> PhoneNumber:
+async def phone_number(session: AsyncSession, business: Business, agent: VoiceAgent) -> PhoneNumber:
     row = PhoneNumber(
         business_id=business.id,
         agent_id=agent.id,
@@ -301,9 +297,7 @@ async def client(session: AsyncSession) -> AsyncIterator[AsyncClient]:
 
 def auth_headers(user: User) -> dict[str, str]:
     """Bearer headers for a user, signed the same way the login endpoint signs."""
-    token, _ = create_access_token(
-        user_id=user.id, business_id=user.business_id, role=user.role
-    )
+    token, _ = create_access_token(user_id=user.id, business_id=user.business_id, role=user.role)
     return {"Authorization": f"Bearer {token}"}
 
 

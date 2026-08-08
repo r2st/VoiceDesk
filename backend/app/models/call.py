@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -57,7 +58,16 @@ class PhoneNumber(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     monthly_rent_paise: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("number", "provider", name="uq_phone_numbers_number_provider"),
+        # Partial: a released number returns to the provider's pool and may
+        # legitimately be provisioned again later.
+        Index(
+            "uq_phone_numbers_number_provider_active",
+            "number",
+            "provider",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
         Index("ix_phone_numbers_business_status", "business_id", "status", "deleted_at"),
     )
 

@@ -57,9 +57,7 @@ class TestInitiateCall:
                 InitiateCallRequest(agent_id=agent.id, to_number="9876500000"),
             )
 
-    async def test_rejects_an_agent_from_another_tenant(
-        self, session, other_business, agent
-    ):
+    async def test_rejects_an_agent_from_another_tenant(self, session, other_business, agent):
         from app.core.errors import NotFoundError
 
         with pytest.raises(NotFoundError):
@@ -114,9 +112,7 @@ class TestInitiateCall:
                 ),
             )
 
-    async def test_dnd_number_is_blocked_and_recorded(
-        self, session, business, agent, phone_number
-    ):
+    async def test_dnd_number_is_blocked_and_recorded(self, session, business, agent, phone_number):
         await compliance.record_opt_out(session, "+919876500000", business.id)
 
         with pytest.raises(ComplianceError) as exc:
@@ -157,9 +153,7 @@ class TestInitiateCall:
         call = await call_service.initiate_call(
             session,
             business.id,
-            InitiateCallRequest(
-                agent_id=agent.id, to_number="9876500000", scheduled_at=in_hours()
-            ),
+            InitiateCallRequest(agent_id=agent.id, to_number="9876500000", scheduled_at=in_hours()),
         )
 
         assert call.status == CallStatus.QUEUED
@@ -211,9 +205,7 @@ class TestInboundRouting:
                 provider=TelephonyProvider.MOCK,
             )
 
-    async def test_inactive_number_does_not_accept_calls(
-        self, session, phone_number
-    ):
+    async def test_inactive_number_does_not_accept_calls(self, session, phone_number):
         from app.core.errors import NotFoundError
 
         phone_number.status = PhoneNumberStatus.RELEASED
@@ -228,9 +220,7 @@ class TestInboundRouting:
                 provider=TelephonyProvider.MOCK,
             )
 
-    async def test_redelivered_ring_returns_the_same_call(
-        self, session, phone_number
-    ):
+    async def test_redelivered_ring_returns_the_same_call(self, session, phone_number):
         """Providers retry the ring webhook; it must not create duplicate calls."""
         kwargs = {
             "to_number": phone_number.number,
@@ -269,9 +259,7 @@ class TestHangup:
 
 
 class TestSoftDelete:
-    async def test_sets_deleted_at_rather_than_removing_the_row(
-        self, session, business, call
-    ):
+    async def test_sets_deleted_at_rather_than_removing_the_row(self, session, business, call):
         call.status = CallStatus.COMPLETED
         await session.flush()
 
@@ -358,9 +346,7 @@ class TestListCalls:
 
 
 class TestCallEndpoints:
-    async def test_initiate_via_http(
-        self, client, owner_headers, agent, phone_number
-    ):
+    async def test_initiate_via_http(self, client, owner_headers, agent, phone_number):
         response = await client.post(
             "/api/v1/calls/initiate",
             headers=owner_headers,
@@ -417,10 +403,6 @@ class TestCallEndpoints:
         )
         assert response.status_code == 409
 
-    async def test_summarise_without_a_transcript_is_404(
-        self, client, owner_headers, call
-    ):
-        response = await client.post(
-            f"/api/v1/calls/{call.id}/summarise", headers=owner_headers
-        )
+    async def test_summarise_without_a_transcript_is_404(self, client, owner_headers, call):
+        response = await client.post(f"/api/v1/calls/{call.id}/summarise", headers=owner_headers)
         assert response.status_code == 404

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
@@ -55,7 +55,16 @@ class VoiceAgent(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     business: Mapped[Business] = relationship(back_populates="agents", lazy="noload")
 
     __table_args__ = (
-        UniqueConstraint("business_id", "name", name="uq_voice_agents_business_id_name"),
+        # Partial: a soft-deleted agent must not hold its name hostage, since
+        # rows are never physically removed.
+        Index(
+            "uq_voice_agents_business_name_active",
+            "business_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
         Index("ix_voice_agents_business_status", "business_id", "status", "deleted_at"),
     )
 
@@ -86,5 +95,13 @@ class Intent(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("business_id", "agent_id", "name", name="uq_intents_scope_name"),
+        Index(
+            "uq_intents_scope_name_active",
+            "business_id",
+            "agent_id",
+            "name",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
     )

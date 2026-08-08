@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, SoftDeleteMixin, TimestampMixin, UUIDPrimaryKeyMixin
@@ -66,7 +66,17 @@ class User(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
 
     business: Mapped[Business] = relationship(back_populates="users", lazy="joined")
 
-    __table_args__ = (UniqueConstraint("business_id", "email", name="uq_users_business_id_email"),)
+    __table_args__ = (
+        # Partial: a soft-deleted user must not block re-inviting that address.
+        Index(
+            "uq_users_business_email_active",
+            "business_id",
+            "email",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<User {self.id} role={self.role}>"
