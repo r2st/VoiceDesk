@@ -139,11 +139,19 @@ def inside_calling_hours(monkeypatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def encryption_key(monkeypatch) -> None:
-    """A fixed AES key so recording encryption is exercised, not skipped."""
-    from app.core.config import settings
+def encryption_key(monkeypatch) -> Iterator[None]:
+    """A fixed AES key so recording encryption is exercised, not skipped.
 
-    monkeypatch.setattr(settings, "recording_encryption_key", "0" * 64, raising=False)
+    ``_encryption_key`` is ``lru_cache``d, so the cache must be cleared on both
+    sides of the override or the key from a previous test leaks into this one.
+    """
+    from app.core.config import settings
+    from app.services.storage import _encryption_key
+
+    monkeypatch.setattr(settings, "recording_encryption_key", "0" * 43 + "=", raising=False)
+    _encryption_key.cache_clear()
+    yield
+    _encryption_key.cache_clear()
 
 
 # --------------------------------------------------------------------------- #

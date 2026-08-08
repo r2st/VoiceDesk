@@ -237,8 +237,10 @@ class TestIntents:
         intents = await agent_service.list_intents(session, business.id, agent_id=agent.id)
         assert [i.name for i in intents] == ["book_appointment"]
 
-    async def test_name_must_be_snake_case(self):
-        with pytest.raises(Exception):
+    def test_name_must_be_snake_case(self):
+        from pydantic import ValidationError as PydanticValidationError
+
+        with pytest.raises(PydanticValidationError):
             IntentCreate(name="Book Appointment")
 
     async def test_duplicate_intent_name_in_the_same_scope_is_rejected(

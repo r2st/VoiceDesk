@@ -176,14 +176,24 @@ class FakeLLMClient:
         *,
         temperature: float = 0.0,
         max_tokens: int = 400,
-        models: list[str] | None = None,
-    ) -> dict:
+    ) -> tuple[dict, LLMResponse]:
+        """Mirrors the real client, which returns ``(parsed, raw_response)``."""
         self.calls.append([m.to_dict() if isinstance(m, LLMMessage) else m for m in messages])
         if self.raise_error:
             from app.core.errors import ExternalServiceError
 
             raise ExternalServiceError("Injected LLM failure")
-        return self.json_replies.pop(0) if self.json_replies else dict(self.default_json)
+
+        payload = self.json_replies.pop(0) if self.json_replies else dict(self.default_json)
+        response = LLMResponse(
+            content=json.dumps(payload),
+            model=self.model,
+            latency_ms=8,
+            prompt_tokens=20,
+            completion_tokens=10,
+            finish_reason="stop",
+        )
+        return payload, response
 
     def queue_json(self, *payloads: dict) -> None:
         self.json_replies.extend(payloads)

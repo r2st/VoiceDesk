@@ -121,15 +121,22 @@ async def ingest_from_provider_url(
 async def get_recording(
     session: AsyncSession, business_id: uuid.UUID, call_id: uuid.UUID
 ) -> CallRecording:
+    # Deleted rows are included so a purge can be reported as a purge rather
+    # than as a generic miss — the caller needs to know the audio is gone for
+    # retention reasons, not that the call never had a recording.
     recording = (
         await session.execute(
-            tenant_select(CallRecording, business_id).where(CallRecording.call_id == call_id)
+            tenant_select(CallRecording, business_id, include_deleted=True).where(
+                CallRecording.call_id == call_id
+            )
         )
     ).scalar_one_or_none()
     if recording is None:
         raise NotFoundError("No recording is available for this call.")
     if recording.purged_at is not None:
         raise NotFoundError("This recording has been purged under the retention policy.")
+    if recording.deleted_at is not None:
+        raise NotFoundError("No recording is available for this call.")
     return recording
 
 
