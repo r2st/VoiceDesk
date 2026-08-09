@@ -18,30 +18,109 @@ from app.services.whatsapp import WhatsAppMessage, WhatsAppProvider, WhatsAppRes
 
 
 class FakeRedis:
-    """Minimal async Redis: enough for the fixed-window rate limiter."""
+    """Minimal async Redis: the fixed-window rate limiter and the job locks.
 
-    def __init__(self) -> None:
-        self.store: dict[str, int] = {}
-        self.expiries: dict[str, int] = {}
+    ``set`` honours ``nx``/``px``/``ex`` because the distributed lock is built
+    entirely out of those flags — a fake that ignored ``nx`` would hand every
+    caller the lock and quietly make the contention tests vacuous. Expiry is
+    evaluated lazily against ``clock`` so a test can expire a key by advancing
+    it rather than by sleeping.
+    """
 
+    def __init__(self, clock: Any = None) -> None:
+        self.store: dict[str, Any] = {}
+        #: key -> monotonic deadline, in the same units as ``clock``.
+        self.deadlines: dict[str, float] = {}
+        self.clock = clock or time.monotonic
+
+    # -- internals --------------------------------------------------------- #
+    def _expired(self, key: str) -> bool:
+        deadline = self.deadlines.get(key)
+        if deadline is None:
+            return False
+        if self.clock() < deadline:
+            return False
+        self.store.pop(key, None)
+        self.deadlines.pop(key, None)
+        return True
+
+    def advance(self, seconds: float) -> None:
+        """Move the fake clock forward, expiring any keys that fall due."""
+        start = self.clock()
+        self.clock = lambda base=start + seconds: base
+        for key in list(self.deadlines):
+            self._expired(key)
+
+    # -- commands ---------------------------------------------------------- #
     async def incr(self, key: str) -> int:
-        self.store[key] = self.store.get(key, 0) + 1
+        self._expired(key)
+        self.store[key] = int(self.store.get(key, 0)) + 1
         return self.store[key]
 
     async def expire(self, key: str, seconds: int) -> bool:
-        self.expiries[key] = seconds
+        if key not in self.store:
+            return False
+        self.deadlines[key] = self.clock() + seconds
         return True
 
+    async def ttl(self, key: str) -> int:
+        if self._expired(key) or key not in self.store:
+            return -2
+        deadline = self.deadlines.get(key)
+        return -1 if deadline is None else max(0, int(deadline - self.clock()))
+
     async def get(self, key: str) -> str | None:
+        if self._expired(key):
+            return None
         value = self.store.get(key)
         return None if value is None else str(value)
 
-    async def set(self, key: str, value: Any, **_: Any) -> bool:
+    async def set(
+        self,
+        key: str,
+        value: Any,
+        *,
+        nx: bool = False,
+        px: int | None = None,
+        ex: int | None = None,
+        **_: Any,
+    ) -> bool | None:
+        self._expired(key)
+        if nx and key in self.store:
+            return None
         self.store[key] = value
+        if px is not None:
+            self.deadlines[key] = self.clock() + px / 1000
+        elif ex is not None:
+            self.deadlines[key] = self.clock() + ex
+        else:
+            self.deadlines.pop(key, None)
         return True
 
     async def delete(self, *keys: str) -> int:
-        return sum(self.store.pop(k, None) is not None for k in keys)
+        removed = 0
+        for key in keys:
+            self.deadlines.pop(key, None)
+            removed += self.store.pop(key, None) is not None
+        return removed
+
+    async def eval(self, script: str, numkeys: int, *args: Any) -> int:
+        """Only the lock-release script is understood.
+
+        Rather than interpret Lua, this recognises the one script the codebase
+        ships and reproduces its compare-and-delete semantics; anything else is
+        a loud failure instead of a silently wrong answer.
+        """
+        from app.core.locks import RELEASE_SCRIPT
+
+        if script.strip() != RELEASE_SCRIPT.strip():
+            raise NotImplementedError("FakeRedis only implements the lock-release script.")
+        key, token = str(args[0]), str(args[1])
+        if self._expired(key) or self.store.get(key) != token:
+            return 0
+        self.store.pop(key, None)
+        self.deadlines.pop(key, None)
+        return 1
 
     async def ping(self) -> bool:
         return True

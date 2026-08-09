@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
 from app.models.analytics import BillingUsage
 from app.models.call import CallLog
-from app.models.enums import CallDirection, CallResolution, CallStatus, PlanTier
+from app.models.enums import CallDirection, CallStatus, PlanTier
 from app.services import billing_service
 from app.services.plans import PLANS, apply_gst, get_plan, paise_to_rupees
 
@@ -33,9 +33,7 @@ class TestCurrentMonth:
 
 
 class TestMeterCall:
-    async def test_completed_call_is_metered_at_the_plan_rate(
-        self, session, business, call
-    ):
+    async def test_completed_call_is_metered_at_the_plan_rate(self, session, business, call):
         business.plan = PlanTier.GROWTH
         call.status = CallStatus.COMPLETED
         call.duration_sec = 125
@@ -132,9 +130,7 @@ class TestUsageCycle:
         assert usage.calls_count == 2
         assert usage.total_paise > 0
 
-    async def test_overage_is_charged_beyond_included_minutes(
-        self, session, business, agent
-    ):
+    async def test_overage_is_charged_beyond_included_minutes(self, session, business, agent):
         business.plan = PlanTier.STARTER  # 200 included minutes
         await session.flush()
         plan = get_plan(PlanTier.STARTER)
@@ -201,9 +197,7 @@ class TestUsageCycle:
         usage = await billing_service.recalculate_usage(session, business.id, "2026-08")
         assert usage.minutes_used == 0
 
-    async def test_another_tenants_calls_are_excluded(
-        self, session, business, other_business
-    ):
+    async def test_another_tenants_calls_are_excluded(self, session, business, other_business):
         session.add(
             CallLog(
                 business_id=other_business.id,
@@ -223,9 +217,7 @@ class TestUsageCycle:
 
 
 class TestFinalize:
-    async def test_closes_the_cycle_and_assigns_an_invoice_number(
-        self, session, business
-    ):
+    async def test_closes_the_cycle_and_assigns_an_invoice_number(self, session, business):
         await billing_service.get_or_create_usage(session, business.id, "2026-07")
         usage = await billing_service.finalize_month(session, business.id, "2026-07")
 
@@ -260,7 +252,10 @@ class TestPlans:
         assert {t.value for t in PlanTier} == {p.value for p in PLANS}
 
     def test_higher_tiers_cost_less_per_minute(self):
-        rates = [PLANS[t].per_minute_paise for t in (PlanTier.STARTER, PlanTier.GROWTH, PlanTier.BUSINESS)]
+        rates = [
+            PLANS[t].per_minute_paise
+            for t in (PlanTier.STARTER, PlanTier.GROWTH, PlanTier.BUSINESS)
+        ]
         assert rates == sorted(rates, reverse=True)
 
     def test_higher_tiers_include_more_minutes(self):

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from app.core.security import sign_webhook
 from app.models.enums import CallResolution, CallStatus, TelephonyProvider
 from app.services import call_service
@@ -26,9 +24,7 @@ def signed(payload: dict) -> tuple[bytes, dict[str, str]]:
 
 class TestSignatureVerification:
     async def test_valid_signature_is_accepted(self, client, call):
-        body, headers = signed(
-            {"provider": "mock", "call_id": str(call.id), "status": "completed"}
-        )
+        body, headers = signed({"provider": "mock", "call_id": str(call.id), "status": "completed"})
         response = await client.post(TELEPHONY_URL, content=body, headers=headers)
         assert response.status_code == 200
 
@@ -93,9 +89,7 @@ class TestSignatureVerification:
 
 
 class TestStatusTransitions:
-    async def test_completed_event_ends_the_call_and_meters_it(
-        self, client, session, call
-    ):
+    async def test_completed_event_ends_the_call_and_meters_it(self, client, session, call):
         body, headers = signed(
             {
                 "provider": "mock",
@@ -128,9 +122,7 @@ class TestStatusTransitions:
         assert call.answered_at is not None
 
     async def test_no_answer_marks_the_call_unresolved(self, client, session, call):
-        body, headers = signed(
-            {"provider": "mock", "call_id": str(call.id), "status": "no-answer"}
-        )
+        body, headers = signed({"provider": "mock", "call_id": str(call.id), "status": "no-answer"})
         await client.post(TELEPHONY_URL, content=body, headers=headers)
 
         await session.refresh(call)
@@ -174,9 +166,7 @@ class TestIdempotency:
         assert call.duration_sec == 125
         assert call.billable_minutes == 3, "a replay must not double-charge"
 
-    async def test_a_call_never_moves_out_of_a_terminal_state(
-        self, client, session, call
-    ):
+    async def test_a_call_never_moves_out_of_a_terminal_state(self, client, session, call):
         """A late 'ringing' after 'completed' must not resurrect the call."""
         completed, headers = signed(
             {"provider": "mock", "call_id": str(call.id), "status": "completed"}
@@ -209,9 +199,7 @@ class TestIdempotency:
 
 
 class TestCallLookup:
-    async def test_matches_by_provider_call_id_when_our_id_is_absent(
-        self, client, session, call
-    ):
+    async def test_matches_by_provider_call_id_when_our_id_is_absent(self, client, session, call):
         body, headers = signed(
             {
                 "provider": "mock",
@@ -334,9 +322,7 @@ class TestRecordingIngest:
 
 class TestCallStatusEndpoint:
     async def test_applies_a_status_transition(self, client, session, call):
-        body, headers = signed(
-            {"provider": "mock", "call_id": str(call.id), "status": "completed"}
-        )
+        body, headers = signed({"provider": "mock", "call_id": str(call.id), "status": "completed"})
         response = await client.post(STATUS_URL, content=body, headers=headers)
 
         assert response.json()["status"] == CallStatus.COMPLETED

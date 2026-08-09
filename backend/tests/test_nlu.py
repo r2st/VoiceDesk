@@ -61,9 +61,7 @@ class TestDetectLanguage:
 
     async def test_result_is_constrained_to_the_allowed_languages(self, fake_llm):
         """An agent configured for Hindi/English must never answer in Tamil."""
-        guess = await nlu.detect_language(
-            "வணக்கம்", allowed=[Language.HINDI, Language.ENGLISH]
-        )
+        guess = await nlu.detect_language("வணக்கம்", allowed=[Language.HINDI, Language.ENGLISH])
         assert guess.language in {Language.HINDI, Language.ENGLISH}
 
     async def test_llm_failure_falls_back_to_the_heuristic(self, fake_llm):
@@ -171,9 +169,7 @@ class TestClassifyIntent:
         assert fake_llm.calls == []
 
     async def test_non_dict_parameters_are_ignored(self, fake_llm):
-        fake_llm.queue_json(
-            {"intent": "book_appointment", "confidence": 0.8, "parameters": "oops"}
-        )
+        fake_llm.queue_json({"intent": "book_appointment", "confidence": 0.8, "parameters": "oops"})
         guess = await nlu.classify_intent("book me in", self.INTENTS)
         assert guess.parameters is None
 

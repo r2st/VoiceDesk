@@ -32,19 +32,19 @@ class TestEncryption:
             decrypt_bytes(b"tiny")
 
     def test_tampered_ciphertext_fails_the_auth_tag(self):
+        from cryptography.exceptions import InvalidTag
+
         payload = bytearray(encrypt_bytes(AUDIO))
         payload[-1] ^= 0xFF
-        with pytest.raises(Exception):
+        # Specifically InvalidTag: the point is that GCM authenticated the
+        # ciphertext and rejected it, not merely that decryption errored.
+        with pytest.raises(InvalidTag):
             decrypt_bytes(bytes(payload))
 
 
 class TestStoreRecording:
-    async def test_stores_encrypted_audio_and_metadata(
-        self, session, business, call, fake_storage
-    ):
-        recording = await recording_service.store_recording(
-            session, call, AUDIO, duration_sec=42
-        )
+    async def test_stores_encrypted_audio_and_metadata(self, session, business, call, fake_storage):
+        recording = await recording_service.store_recording(session, call, AUDIO, duration_sec=42)
 
         assert recording.business_id == business.id
         assert recording.encrypted is True
@@ -65,9 +65,7 @@ class TestStoreRecording:
         with pytest.raises(ConflictError, match="empty"):
             await recording_service.store_recording(session, call, b"")
 
-    async def test_re_ingest_overwrites_rather_than_duplicating(
-        self, session, business, call
-    ):
+    async def test_re_ingest_overwrites_rather_than_duplicating(self, session, business, call):
         first = await recording_service.store_recording(session, call, AUDIO)
         second = await recording_service.store_recording(session, call, AUDIO + b"more")
 
@@ -157,9 +155,7 @@ class TestRetention:
         assert await recording_service.purge_expired(session) == 1
         assert await recording_service.purge_expired(session) == 0
 
-    async def test_purged_recording_is_no_longer_retrievable(
-        self, session, business, call
-    ):
+    async def test_purged_recording_is_no_longer_retrievable(self, session, business, call):
         recording = await recording_service.store_recording(session, call, AUDIO)
         recording.expires_at = datetime.now(UTC) - timedelta(days=1)
         await session.flush()
@@ -176,9 +172,7 @@ class TestRetention:
 
 
 class TestIngestFromProvider:
-    async def test_downloads_and_re_stores_encrypted(
-        self, session, business, call, fake_storage
-    ):
+    async def test_downloads_and_re_stores_encrypted(self, session, business, call, fake_storage):
         recording = await recording_service.ingest_from_provider_url(
             session, call, "https://provider.test/rec/xyz.opus"
         )
@@ -195,14 +189,10 @@ class TestRecordingEndpoints:
         assert response.status_code == 200
         assert response.json()["encrypted"] is True
 
-    async def test_stream_returns_decrypted_audio(
-        self, client, session, owner_headers, call
-    ):
+    async def test_stream_returns_decrypted_audio(self, client, session, owner_headers, call):
         await recording_service.store_recording(session, call, AUDIO)
 
-        response = await client.get(
-            f"/api/v1/recordings/{call.id}/stream", headers=owner_headers
-        )
+        response = await client.get(f"/api/v1/recordings/{call.id}/stream", headers=owner_headers)
         assert response.status_code == 200
         assert response.content == AUDIO
         assert response.headers["cache-control"] == "private, no-store"
@@ -210,9 +200,7 @@ class TestRecordingEndpoints:
     async def test_stream_is_tenant_scoped(self, client, session, other_headers, call):
         await recording_service.store_recording(session, call, AUDIO)
 
-        response = await client.get(
-            f"/api/v1/recordings/{call.id}/stream", headers=other_headers
-        )
+        response = await client.get(f"/api/v1/recordings/{call.id}/stream", headers=other_headers)
         assert response.status_code == 404
 
     async def test_missing_recording_is_404(self, client, owner_headers, call):
