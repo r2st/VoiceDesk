@@ -18,10 +18,16 @@ import type {
   ConversationTurn,
   CurrentUsage,
   DashboardSummary,
+  Lead,
+  LeadDetail,
+  LeadStatus,
+  LeadTier,
   LiveCall,
   Page,
   PhoneNumber,
+  PipelineSummary,
   Plan,
+  QualificationConfig,
   QuotaStatus,
   Takeover,
   TokenPair,
@@ -238,6 +244,25 @@ export const api = {
         method: "POST",
         body: { text },
       }),
+  },
+
+  leads: {
+    list: (params: {
+      limit?: number;
+      offset?: number;
+      status?: LeadStatus | "";
+      tier?: LeadTier | "";
+      min_score?: number;
+      contact_phone?: string;
+    }) => request<Page<Lead>>("/leads", { query: params }),
+    get: (id: string) => request<LeadDetail>(`/leads/${id}`),
+    summary: () => request<PipelineSummary>("/leads/summary"),
+    /** Staff may only move a lead along; the score decides the rest. */
+    setStatus: (id: string, status: LeadStatus) =>
+      request<LeadDetail>(`/leads/${id}`, { method: "PATCH", body: { status } }),
+    rescore: (id: string) =>
+      request<LeadDetail>(`/leads/${id}/rescore`, { method: "POST" }),
+    config: () => request<QualificationConfig>("/leads/config"),
   },
 
   phoneNumbers: {

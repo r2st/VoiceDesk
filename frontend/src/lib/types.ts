@@ -371,3 +371,84 @@ export interface PingFrame {
 }
 
 export type StreamFrame = LiveEvent | SnapshotFrame | PingFrame;
+
+// --------------------------------------------------------------------------- //
+// Leads (design doc §4.9)
+// --------------------------------------------------------------------------- //
+export type BantDimension = "budget" | "authority" | "need" | "timeline";
+
+export type LeadStatus =
+  | "new"
+  | "qualified"
+  | "disqualified"
+  | "contacted"
+  | "converted"
+  | "lost";
+
+export type LeadTier = "hot" | "warm" | "cold" | "unqualified";
+export type LeadSource = "voice_call" | "dashboard" | "whatsapp" | "api";
+
+export type CrmPushStatus = "pending" | "sent" | "failed" | "not_configured";
+
+export interface Lead {
+  id: string;
+  business_id: string;
+  agent_id: string | null;
+  call_id: string | null;
+  contact_name: string;
+  contact_phone: string;
+  contact_email: string | null;
+  company: string | null;
+  interest: string | null;
+  status: LeadStatus;
+  tier: LeadTier;
+  source: LeadSource;
+  language: Language | null;
+  score: number;
+  budget_score: number;
+  authority_score: number;
+  need_score: number;
+  timeline_score: number;
+  budget_answer: string | null;
+  authority_answer: string | null;
+  need_answer: string | null;
+  timeline_answer: string | null;
+  /** One line per dimension explaining how the score was reached. */
+  rationale: Record<string, string>;
+  notes: string | null;
+  qualified_at: string | null;
+  crm_status: CrmPushStatus;
+  crm_pushed_at: string | null;
+  crm_reference: string | null;
+  crm_error: string | null;
+  created_at: string;
+}
+
+export interface DimensionScore {
+  dimension: BantDimension;
+  answer: string | null;
+  /** 0–1. `percent` is the same figure rounded for display. */
+  score: number;
+  percent: number;
+  reason: string;
+}
+
+export interface LeadDetail extends Lead {
+  breakdown: DimensionScore[];
+}
+
+export interface PipelineSummary {
+  total: number;
+  by_tier: Record<string, number>;
+  by_status: Record<string, number>;
+  average_score: number;
+  qualified_rate: number;
+}
+
+export interface QualificationConfig {
+  weights: Record<BantDimension, number>;
+  hot_at: number;
+  warm_at: number;
+  qualify_at: number;
+  currency_floor: number;
+}
