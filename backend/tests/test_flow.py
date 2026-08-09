@@ -213,6 +213,7 @@ class TestFlowEndpoint:
             "intent_branch",
             "condition",
             "api_call",
+            "book_appointment",
             "handoff",
             "transfer",
             "end",

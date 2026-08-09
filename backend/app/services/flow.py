@@ -41,6 +41,7 @@ class NodeType(StrEnum):
     INTENT_BRANCH = "intent_branch"
     CONDITION = "condition"
     API_CALL = "api_call"
+    BOOK_APPOINTMENT = "book_appointment"
     HANDOFF = "handoff"
     TRANSFER = "transfer"
     END = "end"
@@ -118,6 +119,29 @@ class ApiCallNode(_BaseNode):
         return self
 
 
+class BookAppointmentNode(_BaseNode):
+    """Book the slot the caller asked for, in this tenant's calendar.
+
+    The variables named here are filled by earlier ``collect`` nodes. The time
+    variable holds the caller's own words ("kal subah gyarah baje"); the engine
+    resolves them against the business timezone.
+    """
+
+    type: Literal[NodeType.BOOK_APPOINTMENT] = NodeType.BOOK_APPOINTMENT
+    name_variable: Annotated[str, Field(max_length=60)] = "customer_name"
+    time_variable: Annotated[str, Field(max_length=60)] = "preferred_time"
+    service_variable: Annotated[str | None, Field(default=None, max_length=60)] = None
+    #: Defaults to the tenant's configured slot length.
+    duration_minutes: Annotated[int | None, Field(default=None, ge=5, le=480)] = None
+    #: How many alternatives to offer when the requested slot is gone.
+    offer_alternatives: Annotated[int, Field(ge=0, le=5)] = 2
+    next: str | None = None
+    #: Taken slot, or a time outside opening hours.
+    on_unavailable: str | None = None
+    #: Nothing bookable could be understood from the caller's words.
+    on_error: str | None = None
+
+
 class HandoffNode(_BaseNode):
     """Escalate off the voice channel."""
 
@@ -147,6 +171,7 @@ FlowNode = Annotated[
     | IntentBranchNode
     | ConditionNode
     | ApiCallNode
+    | BookAppointmentNode
     | HandoffNode
     | TransferNode
     | EndNode,
@@ -199,7 +224,7 @@ class ConversationFlow(BaseModel):
 def outgoing_edges(node) -> list[str]:
     """All node ids this node can move to."""
     edges: list[str] = []
-    for attr in ("next", "default", "if_true", "if_false", "on_error"):
+    for attr in ("next", "default", "if_true", "if_false", "on_error", "on_unavailable"):
         target = getattr(node, attr, None)
         if target:
             edges.append(target)
@@ -247,7 +272,13 @@ def _describe(error: dict) -> dict:
 
 
 def default_flow(greeting: str, use_case: str = "customer_support") -> dict:
-    """A minimal three-node starter flow used when an agent is created bare."""
+    """The starter flow used when an agent is created without one.
+
+    Appointment-booking agents get a flow that actually books, rather than a
+    generic shell the owner would have to wire up before the agent is useful.
+    """
+    if use_case == "appointment_booking":
+        return appointment_booking_flow(greeting)
     return {
         "start_node": "greeting",
         "nodes": [
@@ -273,4 +304,76 @@ def default_flow(greeting: str, use_case: str = "customer_support") -> dict:
             },
         ],
         "variables": {"use_case": use_case},
+    }
+
+
+def appointment_booking_flow(greeting: str) -> dict:
+    """A working booking flow: name, preferred time, book, confirm.
+
+    The ``book_appointment`` node is what makes this more than a script — it
+    writes into the tenant's calendar and reroutes to ``retry_time`` when the
+    requested slot is gone, having already spoken the nearest alternatives.
+    """
+    return {
+        "start_node": "greeting",
+        "nodes": [
+            {"id": "greeting", "type": "message", "text": greeting, "next": "ask_name"},
+            {
+                "id": "ask_name",
+                "type": "collect",
+                "prompt": "May I have your name, please?",
+                "variable": "customer_name",
+                "next": "ask_time",
+            },
+            {
+                "id": "ask_time",
+                "type": "collect",
+                "prompt": "Which day and time would suit you?",
+                "variable": "preferred_time",
+                "expects": "date",
+                "next": "book",
+            },
+            {
+                "id": "book",
+                "type": "book_appointment",
+                "name_variable": "customer_name",
+                "time_variable": "preferred_time",
+                "offer_alternatives": 2,
+                "next": "wrap_up",
+                "on_unavailable": "retry_time",
+                "on_error": "retry_time",
+            },
+            {
+                "id": "retry_time",
+                "type": "collect",
+                "prompt": "Which of those times works for you?",
+                "variable": "preferred_time",
+                "expects": "date",
+                "next": "book_retry",
+            },
+            {
+                "id": "book_retry",
+                "type": "book_appointment",
+                "name_variable": "customer_name",
+                "time_variable": "preferred_time",
+                # One retry only: a second failure hands off rather than looping.
+                "offer_alternatives": 0,
+                "next": "wrap_up",
+                "on_unavailable": "handoff",
+                "on_error": "handoff",
+            },
+            {
+                "id": "handoff",
+                "type": "handoff",
+                "channel": "whatsapp",
+                "message": "I am sending you our available times on WhatsApp.",
+            },
+            {
+                "id": "wrap_up",
+                "type": "end",
+                "text": "Thank you for calling. See you then!",
+                "disposition": "resolved",
+            },
+        ],
+        "variables": {"use_case": "appointment_booking"},
     }

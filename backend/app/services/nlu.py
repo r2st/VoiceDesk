@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from app.core.logging import get_logger
 from app.models.enums import Language, Sentiment
@@ -315,3 +317,214 @@ def sentiment_trajectory(scores: list[float]) -> dict:
         "trend": trend,
         "points": [round(s, 3) for s in scores],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Appointment slot extraction
+# --------------------------------------------------------------------------- #
+#: Relative day words, in the languages the pipeline actually hears on a call.
+#: Order matters — "day after tomorrow" must be tried before "tomorrow".
+RELATIVE_DAYS: tuple[tuple[str, int], ...] = (
+    ("day after tomorrow", 2),
+    ("parson", 2),
+    ("parso", 2),
+    ("परसों", 2),
+    ("tomorrow", 1),
+    ("kal", 1),
+    ("कल", 1),
+    ("today", 0),
+    ("aaj", 0),
+    ("आज", 0),
+    ("abhi", 0),
+    ("अभी", 0),
+)
+
+WEEKDAY_WORDS: dict[str, int] = {
+    "monday": 0,
+    "somvar": 0,
+    "सोमवार": 0,
+    "tuesday": 1,
+    "mangalvar": 1,
+    "मंगलवार": 1,
+    "wednesday": 2,
+    "budhvar": 2,
+    "बुधवार": 2,
+    "thursday": 3,
+    "guruvar": 3,
+    "गुरुवार": 3,
+    "friday": 4,
+    "shukravar": 4,
+    "शुक्रवार": 4,
+    "saturday": 5,
+    "shanivar": 5,
+    "शनिवार": 5,
+    "sunday": 6,
+    "ravivar": 6,
+    "रविवार": 6,
+}
+
+#: Words that pin an otherwise ambiguous hour to morning or afternoon. "am" and
+#: "pm" are deliberately absent — the regex below captures them as a marker, and
+#: matching them as substrings would read "sh(am)" as a morning.
+MORNING_MARKERS = ("morning", "subah", "सुबह")
+AFTERNOON_MARKERS = (
+    "afternoon",
+    "evening",
+    "night",
+    "dopahar",
+    "shaam",
+    "sham",
+    "raat",
+    "दोपहर",
+    "शाम",
+    "रात",
+)
+
+#: "3 pm", "11 baje", "10:30", "साढ़े" is deliberately out of scope — the LLM
+#: fallback handles anything this does not.
+_TIME_RE = re.compile(
+    r"\b(?P<hour>\d{1,2})(?:[:.](?P<minute>\d{2}))?\s*"
+    r"(?P<marker>am|a\.m\.|pm|p\.m\.|baje|बजे|o'?clock)?\b",
+    re.IGNORECASE,
+)
+
+#: Below this hour, a bare number on a business call means the afternoon:
+#: "come at 3" is 15:00, never 03:00.
+AFTERNOON_ROLLOVER_HOUR = 8
+
+
+@dataclass(frozen=True, slots=True)
+class DateTimeGuess:
+    """A resolved appointment time, or ``None`` when nothing could be parsed."""
+
+    when: datetime | None
+    confidence: float
+    method: str
+
+    @property
+    def resolved(self) -> bool:
+        return self.when is not None
+
+
+def parse_datetime_heuristic(
+    text: str, *, reference: datetime, timezone: str = "Asia/Kolkata"
+) -> DateTimeGuess:
+    """Resolve "kal subah 11 baje" against ``reference``, without a model call.
+
+    A day alone is not enough — a booking needs a time — so a phrase that names
+    only a day returns unresolved and lets the caller be asked for the hour.
+    """
+    if not text or not text.strip():
+        return DateTimeGuess(None, 0.0, "empty")
+
+    zone = ZoneInfo(timezone)
+    local_reference = reference.astimezone(zone)
+    lowered = text.lower()
+
+    day_offset, day_method = _relative_day(lowered, local_reference)
+    moment = _clock_time(lowered)
+    if moment is None:
+        return DateTimeGuess(None, 0.0, "no-time")
+
+    target = (local_reference + timedelta(days=day_offset)).replace(
+        hour=moment.hour, minute=moment.minute, second=0, microsecond=0
+    )
+    # "at 10" said at 18:00 with no day word means tomorrow, not the past.
+    if day_method == "implicit-today" and target <= local_reference:
+        target += timedelta(days=1)
+        day_method = "implicit-tomorrow"
+
+    return DateTimeGuess(target, 0.85 if day_method != "implicit-today" else 0.7, day_method)
+
+
+def _relative_day(lowered: str, reference: datetime) -> tuple[int, str]:
+    for word, offset in RELATIVE_DAYS:
+        if word in lowered:
+            return offset, f"relative:{word}"
+
+    for word, weekday in WEEKDAY_WORDS.items():
+        if word in lowered:
+            ahead = (weekday - reference.weekday()) % 7
+            return ahead or 7, f"weekday:{word}"
+
+    return 0, "implicit-today"
+
+
+def _clock_time(lowered: str) -> time | None:
+    for match in _TIME_RE.finditer(lowered):
+        hour = int(match.group("hour"))
+        minute = int(match.group("minute") or 0)
+        if hour > 24 or minute > 59:
+            continue
+        marker = (match.group("marker") or "").lower()
+        if marker.startswith("p") and hour < 12:
+            hour += 12
+        elif marker.startswith("a") and hour == 12:
+            hour = 0
+        elif not marker.startswith(("a", "p")):
+            hour = _disambiguate_hour(hour, lowered)
+        return time(hour % 24, minute)
+    return None
+
+
+def _disambiguate_hour(hour: int, lowered: str) -> int:
+    if hour >= 13:
+        return hour
+    if any(marker in lowered for marker in MORNING_MARKERS):
+        return hour
+    if any(marker in lowered for marker in AFTERNOON_MARKERS) and hour < 12:
+        return hour + 12
+    if hour < AFTERNOON_ROLLOVER_HOUR:
+        return hour + 12
+    return hour
+
+
+async def parse_datetime_phrase(
+    text: str,
+    *,
+    reference: datetime,
+    timezone: str = "Asia/Kolkata",
+    client: OpenRouterClient | None = None,
+) -> DateTimeGuess:
+    """Heuristic first; ask the LLM only for phrasings the regex cannot reach."""
+    guess = parse_datetime_heuristic(text, reference=reference, timezone=timezone)
+    if guess.resolved:
+        return guess
+    if not text or not text.strip():
+        return guess
+
+    zone = ZoneInfo(timezone)
+    local_reference = reference.astimezone(zone)
+    try:
+        llm = client or get_llm_client()
+        data, _ = await llm.chat_json(
+            [
+                LLMMessage(
+                    role="system",
+                    content=(
+                        "Extract the appointment date and time the caller asked for. "
+                        f"Right now it is {local_reference:%Y-%m-%d %H:%M} "
+                        f"({local_reference:%A}) in {timezone}. "
+                        'Reply with JSON: {"date": "YYYY-MM-DD", "time": "HH:MM" '
+                        '(24-hour), "confidence": 0.0-1.0}. Use null for either field '
+                        "if the caller did not say it. Never guess a time the caller "
+                        "did not mention."
+                    ),
+                ),
+                LLMMessage(role="user", content=text[:500]),
+            ],
+            max_tokens=80,
+        )
+    except Exception as exc:
+        logger.warning("Appointment time extraction failed: %s", exc)
+        return DateTimeGuess(None, 0.0, "error")
+
+    try:
+        day = date.fromisoformat(str(data["date"]))
+        moment = time.fromisoformat(str(data["time"]))
+    except (KeyError, TypeError, ValueError):
+        return DateTimeGuess(None, 0.0, "llm-incomplete")
+
+    when = datetime.combine(day, moment.replace(second=0, microsecond=0), tzinfo=zone)
+    confidence = max(0.0, min(1.0, float(data.get("confidence", 0.6))))
+    return DateTimeGuess(when, confidence, "llm")

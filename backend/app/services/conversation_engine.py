@@ -20,9 +20,13 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.errors import ConflictError, ValidationError
 from app.core.logging import get_logger
+from app.core.timeutil import to_zone
 from app.models.call import CallLog, Conversation
 from app.models.enums import (
+    AppointmentSource,
+    CallDirection,
     CallResolution,
     HandoffReason,
     Language,
@@ -30,6 +34,7 @@ from app.models.enums import (
     SpeakerRole,
 )
 from app.models.voice_agent import VoiceAgent
+from app.schemas.appointment import AppointmentCreate
 from app.services import compliance, nlu
 from app.services.flow import ConversationFlow, NodeType, validate_flow
 from app.services.llm import LLMMessage, OpenRouterClient, get_llm_client
@@ -263,6 +268,11 @@ class ConversationEngine:
         node_id = state.current_node or flow.start_node
         spoken: list[str] = []
         visited: set[str] = set()
+        #: This utterance answers exactly one ``collect`` node — the one the
+        #: caller was asked. A second one reached in the same walk has to ask
+        #: its own question and wait for the next turn, or a single reply would
+        #: silently fill every remaining variable with the same text.
+        utterance_consumed = False
 
         for _ in range(len(flow.nodes) + 1):
             node = flow.get_node(node_id) if node_id else None
@@ -281,8 +291,12 @@ class ConversationEngine:
                 continue
 
             if node.type is NodeType.COLLECT:
+                if utterance_consumed:
+                    # Stop here so this node's prompt is asked below.
+                    break
                 # The caller's utterance answers this node's prompt.
                 state.variables[node.variable] = utterance
+                utterance_consumed = True
                 node_id = node.next
                 if node_id is None:
                     break
@@ -307,6 +321,16 @@ class ConversationEngine:
             if node.type is NodeType.API_CALL:
                 ok = await self._call_api_node(node, state)
                 node_id = node.next if ok else (node.on_error or node.next)
+                if node_id is None:
+                    break
+                continue
+
+            if node.type is NodeType.BOOK_APPOINTMENT:
+                message, target = await self._book_appointment_node(
+                    session, call, agent, node, state, utterance, language_guess
+                )
+                spoken.append(message)
+                node_id = target
                 if node_id is None:
                     break
                 continue
@@ -384,6 +408,136 @@ class ConversationEngine:
             )
 
         return await self._llm_reply(session, call, agent, state, utterance, language_guess)
+
+    async def _book_appointment_node(
+        self,
+        session: AsyncSession,
+        call: CallLog,
+        agent: VoiceAgent,
+        node,
+        state: CallState,
+        utterance: str,
+        language_guess: nlu.LanguageGuess,
+    ) -> tuple[str, str | None]:
+        """Turn the caller's words into a real booking.
+
+        Returns what to say and which node to move to. Every failure path is a
+        route, not an exception — a caller must never hear a stack trace, and
+        the flow author decides what happens when a slot is gone.
+        """
+        from app.services import appointment_service
+
+        config = await appointment_service.get_config(session, call.business_id)
+        language = language_guess.language
+
+        raw_time = str(state.variables.get(node.time_variable) or "").strip() or utterance
+        guess = await nlu.parse_datetime_phrase(
+            raw_time,
+            reference=datetime.now(UTC),
+            timezone=config.timezone,
+            client=self._llm,
+        )
+        if guess.when is None:
+            return (
+                _localised(
+                    language,
+                    "मुझे दिन और समय समझ नहीं आया। आप किस दिन और कितने बजे आना चाहेंगे?",
+                    "I did not catch the day and time. Which day and what time would suit you?",
+                ),
+                node.on_error or node.next,
+            )
+
+        duration = node.duration_minutes or config.slot_minutes
+        payload = AppointmentCreate(
+            customer_name=_caller_name(state.variables.get(node.name_variable)),
+            customer_phone=_customer_number(call),
+            scheduled_at=guess.when,
+            duration_minutes=duration,
+            service=_optional_variable(state, node.service_variable),
+            language=language,
+            agent_id=agent.id,
+            call_id=call.id,
+            source=AppointmentSource.VOICE_CALL,
+        )
+
+        try:
+            appointment = await appointment_service.book(session, call.business_id, payload)
+        except (ConflictError, ValidationError) as exc:
+            return await self._offer_alternatives(
+                session, call, node, state, language, duration, str(exc)
+            )
+
+        state.variables["appointment_id"] = str(appointment.id)
+        state.variables["appointment_time"] = guess.when.astimezone(config.zone).isoformat()
+        logger.info("Call %s booked appointment %s", call.id, appointment.id)
+
+        spoken_time = _spoken_time(guess.when, config.timezone, language)
+        return (
+            _localised(
+                language,
+                f"आपका अपॉइंटमेंट {spoken_time} के लिए बुक हो गया है।",
+                f"Your appointment is booked for {spoken_time}.",
+            ),
+            node.next,
+        )
+
+    async def _offer_alternatives(
+        self,
+        session: AsyncSession,
+        call: CallLog,
+        node,
+        state: CallState,
+        language: Language,
+        duration: int,
+        reason: str,
+    ) -> tuple[str, str | None]:
+        """The requested slot is unusable — read back the nearest openings."""
+        from app.services import appointment_service
+
+        logger.info("Booking on call %s could not be placed: %s", call.id, reason)
+        if node.offer_alternatives <= 0:
+            return (
+                _localised(
+                    language,
+                    "क्षमा करें, वह समय उपलब्ध नहीं है।",
+                    "Sorry, that time is not available.",
+                ),
+                node.on_unavailable or node.next,
+            )
+
+        config = await appointment_service.get_config(session, call.business_id)
+        slots = await appointment_service.next_available_slots(
+            session,
+            call.business_id,
+            limit=node.offer_alternatives,
+            duration_minutes=duration,
+        )
+        state.variables["appointment_alternatives"] = [
+            slot.start.astimezone(config.zone).isoformat() for slot in slots
+        ]
+
+        if not slots:
+            return (
+                _localised(
+                    language,
+                    "क्षमा करें, अगले कुछ दिनों में कोई समय खाली नहीं है।",
+                    "Sorry, there is nothing free over the next few days.",
+                ),
+                node.on_unavailable or node.next,
+            )
+
+        options = " " + _localised(language, "या", "or") + " "
+        readable = options.join(
+            _spoken_time(slot.start, config.timezone, language) for slot in slots
+        )
+        return (
+            _localised(
+                language,
+                f"वह समय उपलब्ध नहीं है। {readable} — इनमें से कौन सा ठीक रहेगा?",
+                f"That time is taken. I have {readable} — would either of those work?",
+            ),
+            node.on_unavailable or node.next,
+        )
 
     async def _call_api_node(self, node, state: CallState) -> bool:
         """Execute an ``api_call`` node against a business system."""
@@ -660,6 +814,34 @@ def _system_prompt(agent: VoiceAgent, language: Language, state: CallState) -> s
 
 def _localised(language: Language, hindi: str, english: str) -> str:
     return hindi if language is Language.HINDI else english
+
+
+def _customer_number(call: CallLog) -> str:
+    """The other party's number: the caller inbound, the callee outbound."""
+    return call.caller_number if call.direction == CallDirection.INBOUND else call.callee_number
+
+
+def _caller_name(value: object) -> str:
+    """A booking needs a name; an unanswered or one-letter reply gets a placeholder."""
+    name = str(value or "").strip()
+    return name if len(name) >= 2 else "Phone caller"
+
+
+def _optional_variable(state: CallState, variable: str | None) -> str | None:
+    if not variable:
+        return None
+    value = state.variables.get(variable)
+    return str(value).strip() or None if value is not None else None
+
+
+def _spoken_time(when: datetime, timezone: str, language: Language) -> str:
+    """Format a slot the way it will be read aloud, not the way it is stored."""
+    local = to_zone(when, timezone)
+    if language is Language.HINDI:
+        return f"{local:%d} {local:%B} {local:%I:%M %p}".replace("AM", "बजे सुबह").replace(
+            "PM", "बजे शाम"
+        )
+    return f"{local:%A %d %B} at {local:%I:%M %p}".replace(" 0", " ")
 
 
 def _elapsed_ms(started: datetime) -> int:
