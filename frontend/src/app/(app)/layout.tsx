@@ -10,6 +10,7 @@ import { titleCase } from "@/lib/format";
 
 const NAV = [
   { href: "/dashboard", label: "Overview" },
+  { href: "/monitor", label: "Live" },
   { href: "/calls", label: "Calls" },
   { href: "/agents", label: "Agents" },
   { href: "/numbers", label: "Numbers" },

@@ -37,3 +37,6 @@ keys/
 !.env.example
 yarn-error.log*
 pnpm-debug.log*
+
+# TypeScript incremental build cache
+*.tsbuildinfo

@@ -14,13 +14,16 @@ import type {
   Call,
   CallAnalytics,
   CallDetail,
+  CallSnapshot,
   ConversationTurn,
   CurrentUsage,
   DashboardSummary,
+  LiveCall,
   Page,
   PhoneNumber,
   Plan,
   QuotaStatus,
+  Takeover,
   TokenPair,
   Usage,
   User,
@@ -214,6 +217,27 @@ export const api = {
     get: (id: string) => request<CallDetail>(`/calls/${id}`),
     transcript: (id: string) =>
       request<ConversationTurn[]>(`/calls/${id}/transcript`),
+  },
+
+  monitor: {
+    live: () => request<LiveCall[]>("/monitor/live"),
+    snapshot: (callId: string) =>
+      request<CallSnapshot>(`/monitor/calls/${callId}`),
+    takeOver: (callId: string, reason?: string) =>
+      request<Takeover>(`/monitor/calls/${callId}/takeover`, {
+        method: "POST",
+        body: { reason: reason || null },
+      }),
+    release: (callId: string, returnToAi = true) =>
+      request<Takeover>(`/monitor/calls/${callId}/release`, {
+        method: "POST",
+        body: { return_to_ai: returnToAi },
+      }),
+    say: (callId: string, text: string) =>
+      request<ConversationTurn>(`/monitor/calls/${callId}/say`, {
+        method: "POST",
+        body: { text },
+      }),
   },
 
   phoneNumbers: {

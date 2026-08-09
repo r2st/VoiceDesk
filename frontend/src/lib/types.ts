@@ -299,3 +299,75 @@ export interface CurrentUsage {
   quota: QuotaStatus;
   projected_total_paise: number;
 }
+
+// --------------------------------------------------------------------------- //
+// Live monitoring (design doc §4.3)
+// --------------------------------------------------------------------------- //
+export interface Takeover {
+  id: string;
+  business_id: string;
+  call_id: string;
+  supervisor_user_id: string;
+  reason: string | null;
+  started_at: string;
+  ended_at: string | null;
+  turns_spoken: number;
+  returned_to_ai: boolean;
+}
+
+export interface LiveCall {
+  call_id: string;
+  agent_id: string | null;
+  direction: CallDirection;
+  status: CallStatus;
+  caller_number: string;
+  callee_number: string;
+  language: Language | null;
+  sentiment: Sentiment | null;
+  sentiment_score: number | null;
+  started_at: string | null;
+  answered_at: string | null;
+  elapsed_sec: number;
+  turn_count: number;
+  last_speaker: SpeakerRole | null;
+  last_utterance: string | null;
+  takeover: Takeover | null;
+}
+
+export interface CallSnapshot {
+  call: Call;
+  turns: ConversationTurn[];
+  takeover: Takeover | null;
+}
+
+/** Event names the stream emits. Mirrors `app.core.events.EventType`. */
+export type LiveEventType =
+  | "call.started"
+  | "call.status"
+  | "call.ended"
+  | "transcript.turn"
+  | "takeover.started"
+  | "takeover.ended"
+  | "call.handoff";
+
+export interface LiveEvent {
+  type: LiveEventType;
+  business_id: string;
+  call_id: string | null;
+  data: Record<string, unknown>;
+  emitted_at: string;
+}
+
+/** The two control frames the socket sends alongside domain events. */
+export interface SnapshotFrame {
+  type: "snapshot";
+  call_id: string;
+  data: CallSnapshot;
+}
+
+export interface PingFrame {
+  type: "ping";
+  at: string;
+}
+
+export type StreamFrame = LiveEvent | SnapshotFrame | PingFrame;
