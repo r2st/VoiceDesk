@@ -23,7 +23,7 @@ from app.models.enums import (
 )
 from app.models.voice_agent import VoiceAgent
 from app.schemas.call import InitiateCallRequest
-from app.services import billing_service, compliance
+from app.services import billing_service, compliance, entitlements
 from app.services.telephony import CallRequest, WebhookEvent, get_provider
 
 logger = get_logger(__name__)
@@ -36,6 +36,10 @@ async def initiate_call(
     session: AsyncSession, business_id: uuid.UUID, payload: InitiateCallRequest
 ) -> CallLog:
     """Place (or schedule) an outbound call after clearing TRAI rules."""
+    # Checked before anything else: a suspended tenant should be told its
+    # account is the problem, not sent away with a complaint about its agent.
+    await entitlements.require_calling_entitlement(session, business_id)
+
     agent = await get_owned_or_404(
         session, VoiceAgent, payload.agent_id, business_id, label="Agent"
     )
@@ -208,6 +212,11 @@ async def handle_inbound_call(
     existing = await find_by_provider_call_id(session, provider, provider_call_id)
     if existing is not None:
         return existing, agent
+
+    # Checked only for a genuinely new call. Doing it earlier would mean a
+    # tenant whose trial lapses mid-call starts rejecting the webhook replays
+    # for the call already in progress.
+    await entitlements.require_calling_entitlement(session, line.business_id)
 
     call = CallLog(
         business_id=line.business_id,
