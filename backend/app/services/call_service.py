@@ -257,6 +257,19 @@ async def apply_webhook_event(
         )
         return None, False
 
+    if event.status is None:
+        # The callback said nothing about the call's state — a recording-ready
+        # ping, or a status the provider introduced after this code was written.
+        # Its side data is still worth keeping, but it must not decide the
+        # call's state: an unrecognised status used to parse as `failed`, which
+        # is terminal, so a stray callback ended a live call, stamped it
+        # unresolved and metered it for billing.
+        if event.provider_call_id and not call.provider_call_id:
+            call.provider_call_id = event.provider_call_id
+        _attach_event_details(call, event)
+        await session.flush()
+        return call, False
+
     if call.status == event.status.value and call.status not in {s.value for s in NON_TERMINAL}:
         return call, True
 
@@ -278,14 +291,7 @@ async def apply_webhook_event(
         if event.status != CallStatus.COMPLETED and call.resolution == CallResolution.PENDING:
             call.resolution = CallResolution.UNRESOLVED
 
-    if event.error_code:
-        call.error_code = event.error_code[:80]
-    if event.error_message:
-        call.error_message = event.error_message[:500]
-    if event.recording_url:
-        metadata = dict(call.metadata_json or {})
-        metadata["recording_url"] = event.recording_url
-        call.metadata_json = metadata
+    _attach_event_details(call, event)
 
     await session.flush()
 
@@ -300,6 +306,18 @@ async def apply_webhook_event(
         previous=previous,
     )
     return call, False
+
+
+def _attach_event_details(call: CallLog, event: WebhookEvent) -> None:
+    """Copy the non-status fields of a webhook event onto the call."""
+    if event.error_code:
+        call.error_code = event.error_code[:80]
+    if event.error_message:
+        call.error_message = event.error_message[:500]
+    if event.recording_url:
+        metadata = dict(call.metadata_json or {})
+        metadata["recording_url"] = event.recording_url
+        call.metadata_json = metadata
 
 
 async def _locate_call(session: AsyncSession, event: WebhookEvent, provider: str) -> CallLog | None:

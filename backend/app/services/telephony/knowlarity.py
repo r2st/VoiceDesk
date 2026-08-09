@@ -19,6 +19,8 @@ from app.services.telephony.base import (
     ProvisionedNumber,
     TelephonyProvider,
     WebhookEvent,
+    coerce_duration,
+    coerce_text,
 )
 
 BASE_URL = "https://kpi.knowlarity.com/Basic/v1/account"
@@ -59,7 +61,13 @@ class KnowlarityProvider(TelephonyProvider):
             timeout=20.0,
         )
 
+    def _require_credentials(self) -> None:
+        """Fail loudly on a half-configured deployment rather than at the socket."""
+        if not self.api_key:
+            raise ExternalServiceError("Knowlarity is not configured: KNOWLARITY_API_KEY not set.")
+
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        self._require_credentials()
         client = self._http()
         owns_client = self._client is None
         try:
@@ -69,7 +77,16 @@ class KnowlarityProvider(TelephonyProvider):
                     f"Knowlarity returned {response.status_code}.",
                     details={"body": response.text[:500]},
                 )
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as exc:
+                # `JSONDecodeError` is a `ValueError`, not an `httpx.HTTPError`,
+                # so a gateway answering 200 with HTML escaped this adapter
+                # uncaught. See the matching note in the Exotel provider.
+                raise ExternalServiceError(
+                    "Knowlarity returned a body that is not JSON.",
+                    details={"body": response.text[:500]},
+                ) from exc
         except httpx.HTTPError as exc:
             raise ExternalServiceError(f"Knowlarity request failed: {exc}") from exc
         finally:
@@ -106,8 +123,12 @@ class KnowlarityProvider(TelephonyProvider):
         chosen = next(
             (
                 item
+                # A row without a number is unusable, and indexing it below
+                # raised `KeyError` instead of the `ExternalServiceError`
+                # callers translate into a clean 502.
                 for item in numbers
-                if (number is None or item.get("number") == number)
+                if item.get("number")
+                and (number is None or item.get("number") == number)
                 and (region is None or item.get("circle") == region)
             ),
             None,
@@ -133,14 +154,16 @@ class KnowlarityProvider(TelephonyProvider):
         extra = payload.get("additional_params") or {}
         return WebhookEvent(
             provider_call_id=str(payload.get("call_id") or payload.get("uuid") or ""),
-            status=STATUS_MAP.get(status, CallStatus.FAILED),
+            # Deliberately no fallback: an unknown or absent status leaves this
+            # `None` so the call keeps the state it already had.
+            status=STATUS_MAP.get(status),
             call_id=extra.get("call_id"),
-            duration_sec=int(payload.get("call_duration") or payload.get("duration") or 0),
+            duration_sec=coerce_duration(payload.get("call_duration"), payload.get("duration")),
             recording_url=payload.get("resource_url") or payload.get("recording_url"),
             from_number=payload.get("caller_id") or payload.get("customer_number"),
             to_number=payload.get("knowlarity_number") or payload.get("agent_number"),
-            error_code=payload.get("error_code"),
-            error_message=payload.get("error_message"),
+            error_code=coerce_text(payload.get("error_code")),
+            error_message=coerce_text(payload.get("error_message")),
             raw=payload,
         )
 

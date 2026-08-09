@@ -20,6 +20,8 @@ from app.services.telephony.base import (
     ProvisionedNumber,
     TelephonyProvider,
     WebhookEvent,
+    coerce_duration,
+    coerce_text,
 )
 
 logger = get_logger(__name__)
@@ -62,7 +64,27 @@ class ExotelProvider(TelephonyProvider):
             return self._client
         return httpx.AsyncClient(auth=(self.api_key, self.api_token), timeout=20.0)
 
+    def _require_credentials(self) -> None:
+        """Fail loudly on a half-configured deployment.
+
+        Without this the adapter happily builds ``https:///v1/Accounts/`` out of
+        empty settings and the first symptom is a DNS error on the call path,
+        which reads like a network problem rather than a missing secret.
+        """
+        missing = [
+            name
+            for name, value in (
+                ("EXOTEL_SID", self.sid),
+                ("EXOTEL_API_KEY", self.api_key),
+                ("EXOTEL_API_TOKEN", self.api_token),
+            )
+            if not value
+        ]
+        if missing:
+            raise ExternalServiceError(f"Exotel is not configured: {', '.join(missing)} not set.")
+
     async def _request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        self._require_credentials()
         client = self._http()
         owns_client = self._client is None
         try:
@@ -72,7 +94,17 @@ class ExotelProvider(TelephonyProvider):
                     f"Exotel returned {response.status_code}.",
                     details={"body": response.text[:500]},
                 )
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as exc:
+                # A proxy or WAF in front of Exotel answering 200 with an HTML
+                # page. `JSONDecodeError` is a `ValueError`, not an
+                # `httpx.HTTPError`, so it escaped uncaught and reached callers
+                # that only defend against `ExternalServiceError`.
+                raise ExternalServiceError(
+                    "Exotel returned a body that is not JSON.",
+                    details={"body": response.text[:500]},
+                ) from exc
         except httpx.HTTPError as exc:
             raise ExternalServiceError(f"Exotel request failed: {exc}") from exc
         finally:
@@ -114,8 +146,13 @@ class ExotelProvider(TelephonyProvider):
         chosen = next(
             (
                 item
+                # A row without a number is unusable, and indexing it below
+                # raised `KeyError` — an unhandled 500 rather than the 502 that
+                # callers translate `ExternalServiceError` into. Skipping it
+                # also lets a later, complete row satisfy the request.
                 for item in candidates
-                if (number is None or item.get("PhoneNumber") == number)
+                if item.get("PhoneNumber")
+                and (number is None or item.get("PhoneNumber") == number)
                 and (region is None or item.get("Region") == region)
             ),
             None,
@@ -138,17 +175,20 @@ class ExotelProvider(TelephonyProvider):
 
     def parse_webhook(self, payload: dict[str, Any]) -> WebhookEvent:
         status = str(payload.get("Status") or payload.get("CallStatus") or "").lower()
-        duration = payload.get("ConversationDuration") or payload.get("DialCallDuration") or 0
         return WebhookEvent(
             provider_call_id=str(payload.get("CallSid") or payload.get("Sid") or ""),
-            status=STATUS_MAP.get(status, CallStatus.FAILED),
+            # Deliberately no fallback: an unknown or absent status leaves this
+            # `None` so the call keeps the state it already had.
+            status=STATUS_MAP.get(status),
             call_id=payload.get("CustomField") or None,
-            duration_sec=int(duration or 0),
+            duration_sec=coerce_duration(
+                payload.get("ConversationDuration"), payload.get("DialCallDuration")
+            ),
             recording_url=payload.get("RecordingUrl") or None,
             from_number=payload.get("From") or payload.get("CallFrom"),
             to_number=payload.get("To") or payload.get("CallTo"),
-            error_code=payload.get("ErrorCode"),
-            error_message=payload.get("ErrorMessage"),
+            error_code=coerce_text(payload.get("ErrorCode")),
+            error_message=coerce_text(payload.get("ErrorMessage")),
             raw=payload,
         )
 

@@ -126,10 +126,13 @@ class MockTelephonyProvider(TelephonyProvider):
         return self._numbers.pop(provider_number_id, None) is not None
 
     def parse_webhook(self, payload: dict[str, Any]) -> WebhookEvent:
+        # Omitting ``status`` means "the call finished" — a scripting shorthand
+        # the real providers do not have. An unrecognised status still parses as
+        # ``None``, matching them, so it cannot end a call by accident.
         raw_status = str(payload.get("status", "completed")).lower()
         return WebhookEvent(
             provider_call_id=str(payload.get("provider_call_id") or payload.get("CallSid") or ""),
-            status=_STATUS_ALIASES.get(raw_status, CallStatus.FAILED),
+            status=_STATUS_ALIASES.get(raw_status),
             call_id=payload.get("call_id"),
             duration_sec=int(payload.get("duration_sec") or 0),
             recording_url=payload.get("recording_url"),

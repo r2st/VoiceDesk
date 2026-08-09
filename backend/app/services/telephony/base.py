@@ -48,7 +48,12 @@ class WebhookEvent:
     """A normalised telephony event, whatever the provider's wire format."""
 
     provider_call_id: str
-    status: CallStatus
+    #: ``None`` when the callback said nothing about the call's state — either
+    #: it carried no status at all (a recording-ready ping) or one this code
+    #: does not know. Consumers must leave the call's status alone in that
+    #: case: guessing used to mean ``FAILED``, which is terminal, so a stray
+    #: callback ended a live call and metered it for billing.
+    status: CallStatus | None = None
     #: Our own call id when the provider echoed it back.
     call_id: str | None = None
     duration_sec: int = 0
@@ -58,6 +63,32 @@ class WebhookEvent:
     error_code: str | None = None
     error_message: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+def coerce_duration(*candidates: Any) -> int:
+    """Seconds, from the first candidate that reads as a number.
+
+    Providers disagree about the wire type: Exotel form-encodes everything, so
+    a duration arrives as ``"45"`` or ``"45.0"``, while Knowlarity sends JSON
+    numbers. A value that is not a number at all must not raise — webhooks are
+    parsed inside the request handler, so an exception is a 500, and a 500 is
+    answered by redelivering the same body every few minutes indefinitely.
+    """
+    for value in candidates:
+        if value is None or value == "":
+            continue
+        try:
+            return max(0, int(float(value)))
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def coerce_text(value: Any) -> str | None:
+    """A provider field as text. Error codes arrive as ints as often as strings."""
+    if value is None or value == "":
+        return None
+    return str(value)
 
 
 class TelephonyProvider(ABC):
