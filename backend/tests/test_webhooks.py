@@ -298,6 +298,56 @@ class TestRecordingIngest:
         assert response.status_code == 200
         assert fake_storage.objects, "the audio must be copied into our own storage"
 
+    async def test_a_recording_arriving_after_the_call_ended_is_still_ingested(
+        self, client, session, call, fake_storage
+    ):
+        """Providers finish encoding the audio well after they report the hangup.
+
+        The common shape is two callbacks: `completed` with no audio, then the
+        same `completed` again once the recording exists. The second one is a
+        duplicate as far as the status goes, and the endpoint used to stop
+        there — so the only callback that ever carried the URL was dropped and
+        the recording was lost for good.
+        """
+        ended, headers = signed(
+            {"provider": "mock", "call_id": str(call.id), "status": "completed", "duration_sec": 60}
+        )
+        await client.post(TELEPHONY_URL, content=ended, headers=headers)
+        assert fake_storage.objects == {}
+
+        late, headers = signed(
+            {
+                "provider": "mock",
+                "call_id": str(call.id),
+                "status": "completed",
+                "duration_sec": 60,
+                "recording_url": "https://provider.test/rec/abc.opus",
+            }
+        )
+        response = await client.post(TELEPHONY_URL, content=late, headers=headers)
+
+        assert response.status_code == 200
+        assert fake_storage.objects, "the late recording must still be copied into our storage"
+
+    async def test_a_redelivered_recording_is_not_downloaded_twice(
+        self, client, session, call, fake_storage, mock_telephony
+    ):
+        """Providers retry aggressively; the audio must be pulled once."""
+        body, headers = signed(
+            {
+                "provider": "mock",
+                "call_id": str(call.id),
+                "status": "completed",
+                "duration_sec": 60,
+                "recording_url": "https://provider.test/rec/abc.opus",
+            }
+        )
+        await client.post(TELEPHONY_URL, content=body, headers=headers)
+        await client.post(TELEPHONY_URL, content=body, headers=headers)
+
+        fetches = [i for i in mock_telephony.interactions if i["action"] == "fetch_recording"]
+        assert len(fetches) == 1
+
     async def test_a_failing_ingest_does_not_fail_the_webhook(
         self, client, session, call, fake_storage
     ):

@@ -270,11 +270,19 @@ async def apply_webhook_event(
         await session.flush()
         return call, False
 
+    # A repeat of a status we have already applied. The status itself is a
+    # no-op, but the event may still be carrying detail the first delivery did
+    # not have — a recording URL usually, since the audio is encoded after the
+    # hangup is reported — so its side data is attached before returning.
     if call.status == event.status.value and call.status not in {s.value for s in NON_TERMINAL}:
+        _attach_event_details(call, event)
+        await session.flush()
         return call, True
 
     # Never move a call backwards out of a terminal state.
     if call.status in {s.value for s in CallStatus.terminal()}:
+        _attach_event_details(call, event)
+        await session.flush()
         return call, True
 
     previous = call.status

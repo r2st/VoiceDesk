@@ -113,7 +113,11 @@ async def telephony_webhook(
         # Unknown call: acknowledge so the provider stops retrying a lost cause.
         return WebhookAck(received=True)
 
-    if event.recording_url and not duplicate:
+    # Not gated on `duplicate`: providers finish encoding the audio after they
+    # report the hangup, so the callback carrying the URL is usually a repeat of
+    # a terminal status we have already applied. Gating on the status made that
+    # the one callback we ignored, and the recording was lost for good.
+    if event.recording_url:
         await _ingest_recording(session, call, event.recording_url, provider_name)
 
     return WebhookAck(call_id=call.id, status=CallStatus(call.status), duplicate=duplicate)
@@ -143,7 +147,14 @@ async def _known(session: AsyncSession, provider: str, event: WebhookEvent) -> b
 
 
 async def _ingest_recording(session: AsyncSession, call: CallLog, url: str, provider: str) -> None:
-    """Pull the recording into our own encrypted bucket; never fail the webhook."""
+    """Pull the recording into our own encrypted bucket; never fail the webhook.
+
+    Redelivery is the norm rather than the exception here, so this returns
+    early once the audio is stored. Without that, every retry of a terminal
+    callback would download and re-encrypt the same file.
+    """
+    if await recording_service.has_recording(session, call):
+        return
     try:
         await recording_service.ingest_from_provider_url(session, call, url)
     except Exception as exc:

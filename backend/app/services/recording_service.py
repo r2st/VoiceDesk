@@ -109,6 +109,23 @@ async def store_recording(
     return recording
 
 
+async def has_recording(session: AsyncSession, call: CallLog) -> bool:
+    """Whether this call's audio is already stored.
+
+    Purged rows count: retention deleted the audio deliberately, and a late
+    provider retry must not quietly restore it.
+    """
+    existing = (
+        await session.execute(
+            select(CallRecording.id).where(
+                CallRecording.call_id == call.id,
+                CallRecording.business_id == call.business_id,
+            )
+        )
+    ).first()
+    return existing is not None
+
+
 async def ingest_from_provider_url(
     session: AsyncSession, call: CallLog, url: str, *, storage: StorageService | None = None
 ) -> CallRecording:
