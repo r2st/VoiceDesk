@@ -35,18 +35,8 @@ async def provision_number(
     provider_name = (payload.provider or settings.telephony_provider).lower()
     provider = get_provider(provider_name)
 
-    if payload.number:
-        existing = (
-            await session.execute(
-                select(PhoneNumber).where(
-                    PhoneNumber.number == payload.number,
-                    PhoneNumber.provider == provider_name,
-                    PhoneNumber.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one_or_none()
-        if existing is not None:
-            raise ConflictError(f"Number {payload.number} is already provisioned.")
+    if payload.number and await _already_held(session, payload.number, provider_name):
+        raise ConflictError(f"Number {payload.number} is already provisioned.")
 
     number = PhoneNumber(
         business_id=business_id,
@@ -69,6 +59,15 @@ async def provision_number(
             f"Telephony provider could not allocate a number: {exc}"
         ) from exc
 
+    # The provider chooses the number when the caller did not, and it can hand
+    # back one the platform still holds — most often after a release the
+    # provider recorded and this side did not. Reject it as a conflict rather
+    # than letting the unique index surface as a 500.
+    if await _already_held(session, allocated.number, provider_name, excluding=number.id):
+        number.status = PhoneNumberStatus.FAILED
+        await session.flush()
+        raise ConflictError(f"Number {allocated.number} is already provisioned.")
+
     number.number = allocated.number
     number.provider_number_id = allocated.provider_number_id
     number.region = allocated.region or payload.region
@@ -83,6 +82,29 @@ async def provision_number(
         provider_name,
     )
     return number
+
+
+async def _already_held(
+    session: AsyncSession,
+    number: str,
+    provider_name: str,
+    *,
+    excluding: uuid.UUID | None = None,
+) -> bool:
+    """Is this line already on the books, for any tenant?
+
+    A number belongs to the network rather than to a business, so the check
+    deliberately ignores tenant scoping — two tenants holding one line would
+    route the same caller to two different agents.
+    """
+    stmt = select(PhoneNumber.id).where(
+        PhoneNumber.number == number,
+        PhoneNumber.provider == provider_name,
+        PhoneNumber.deleted_at.is_(None),
+    )
+    if excluding is not None:
+        stmt = stmt.where(PhoneNumber.id != excluding)
+    return (await session.execute(stmt.limit(1))).scalar_one_or_none() is not None
 
 
 async def get_number(
