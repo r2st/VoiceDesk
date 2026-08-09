@@ -151,8 +151,11 @@ class WebhookCrmClient(CrmClient):
 
     name = "webhook"
 
+    def __init__(self, client: httpx.AsyncClient | None = None) -> None:
+        self._client = client
+
     async def push(self, config: CrmConfig, lead: Lead) -> CrmResult:
-        if not config.webhook_url:  # pragma: no cover - callers check first
+        if not config.webhook_url:
             return CrmResult(delivered=False, error="No CRM webhook configured.")
 
         body = json.dumps(lead_payload(lead), separators=(",", ":")).encode()
@@ -163,11 +166,16 @@ class WebhookCrmClient(CrmClient):
             **config.headers,
         }
 
+        client = self._client or httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS)
+        owns_client = self._client is None
         try:
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            try:
                 response = await client.post(config.webhook_url, content=body, headers=headers)
-        except httpx.HTTPError as exc:
-            return CrmResult(delivered=False, error=f"{type(exc).__name__}: {exc}"[:500])
+            except httpx.HTTPError as exc:
+                return CrmResult(delivered=False, error=f"{type(exc).__name__}: {exc}"[:500])
+        finally:
+            if owns_client:
+                await client.aclose()
 
         if response.status_code >= 400:
             return CrmResult(

@@ -926,3 +926,134 @@ class TestRetryEndpoint:
         )
 
         assert response.status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# GoSumoProvider — the real provider on the wire
+# --------------------------------------------------------------------------- #
+def gosumo_client(*responses) -> tuple[whatsapp.GoSumoProvider, list]:
+    import httpx
+
+    seen: list[httpx.Request] = []
+    queued = list(responses)
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        item = queued.pop(0) if queued else httpx.Response(200, json={"message_id": "wa-1"})
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    http = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    provider = whatsapp.GoSumoProvider(
+        api_url="https://gosumo.test/v1", api_key="key-1", client=http
+    )
+    return provider, seen
+
+
+class TestGoSumoProvider:
+    async def test_a_successful_send_is_accepted(self):
+        provider, seen = gosumo_client()
+
+        result = await provider.send(whatsapp.WhatsAppMessage(to_number="+91900", body="hi"))
+
+        assert result.accepted is True
+        assert result.message_id == "wa-1"
+        assert len(seen) == 1
+
+    async def test_the_message_body_is_sent_as_a_text_message(self):
+        import json
+
+        provider, seen = gosumo_client()
+
+        await provider.send(whatsapp.WhatsAppMessage(to_number="+91900", body="hello there"))
+
+        sent = json.loads(seen[0].content)
+        assert sent["to"] == "+91900"
+        assert sent["type"] == "text"
+        assert sent["text"]["body"] == "hello there"
+
+    async def test_context_is_forwarded(self):
+        import json
+
+        provider, seen = gosumo_client()
+
+        await provider.send(
+            whatsapp.WhatsAppMessage(to_number="+91900", body="hi", context={"call_id": "c1"})
+        )
+
+        assert json.loads(seen[0].content)["context"] == {"call_id": "c1"}
+
+    async def test_missing_context_defaults_to_empty(self):
+        import json
+
+        provider, seen = gosumo_client()
+
+        await provider.send(whatsapp.WhatsAppMessage(to_number="+91900", body="hi"))
+
+        assert json.loads(seen[0].content)["context"] == {}
+
+    async def test_the_api_key_is_sent_as_a_bearer_token(self):
+        provider, seen = gosumo_client()
+
+        await provider.send(whatsapp.WhatsAppMessage(to_number="+91900", body="hi"))
+
+        assert seen[0].headers["Authorization"] == "Bearer key-1"
+
+    async def test_falls_back_to_the_id_field_when_message_id_is_absent(self):
+        import httpx
+
+        provider, _ = gosumo_client(httpx.Response(200, json={"id": "wa-legacy"}))
+
+        result = await provider.send(whatsapp.WhatsAppMessage(to_number="+91900", body="hi"))
+
+        assert result.message_id == "wa-legacy"
+
+    async def test_an_error_status_is_not_accepted(self):
+        import httpx
+
+        provider, _ = gosumo_client(httpx.Response(400, text="bad request"))
+
+        result = await provider.send(whatsapp.WhatsAppMessage(to_number="+91900", body="hi"))
+
+        assert result.accepted is False
+        assert result.error is not None and "400" in result.error
+
+    async def test_a_transport_error_is_not_accepted(self):
+        import httpx
+
+        provider, _ = gosumo_client(httpx.ConnectError("refused"))
+
+        result = await provider.send(whatsapp.WhatsAppMessage(to_number="+91900", body="hi"))
+
+        assert result.accepted is False
+        assert result.error is not None
+
+    async def test_a_missing_api_key_is_an_external_service_error(self):
+        from app.core.errors import ExternalServiceError
+
+        provider = whatsapp.GoSumoProvider(api_url="https://gosumo.test/v1", api_key="")
+
+        with pytest.raises(ExternalServiceError):
+            await provider.send(whatsapp.WhatsAppMessage(to_number="+91900", body="hi"))
+
+    async def test_gosumo_is_selected_when_configured(self, monkeypatch):
+        from app.core.config import settings
+
+        whatsapp.set_whatsapp_provider(None)
+        monkeypatch.setattr(settings, "whatsapp_provider", "gosumo")
+        monkeypatch.setattr(settings, "gosumo_api_key", "key-1")
+        try:
+            assert isinstance(whatsapp.get_whatsapp_provider(), whatsapp.GoSumoProvider)
+        finally:
+            whatsapp.set_whatsapp_provider(None)
+
+    async def test_mock_is_selected_otherwise(self, monkeypatch):
+        from app.core.config import settings
+
+        whatsapp.set_whatsapp_provider(None)
+        monkeypatch.setattr(settings, "whatsapp_provider", "mock")
+        try:
+            assert isinstance(whatsapp.get_whatsapp_provider(), whatsapp.MockWhatsAppProvider)
+        finally:
+            whatsapp.set_whatsapp_provider(None)
