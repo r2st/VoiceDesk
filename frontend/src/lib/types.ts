@@ -452,3 +452,67 @@ export interface QualificationConfig {
   qualify_at: number;
   currency_floor: number;
 }
+
+// --------------------------------------------------------------------------- //
+// Appointments (design doc §4.4)
+// --------------------------------------------------------------------------- //
+export type AppointmentStatus =
+  | "scheduled"
+  | "confirmed"
+  | "completed"
+  | "cancelled"
+  | "no_show"
+  | "rescheduled";
+
+export type AppointmentSource = "voice_call" | "dashboard" | "whatsapp" | "api";
+
+export interface Appointment {
+  id: string;
+  business_id: string;
+  agent_id: string | null;
+  call_id: string | null;
+  customer_name: string;
+  customer_phone: string;
+  customer_email: string | null;
+  service: string | null;
+  /** UTC instant. Rendered in the tenant's timezone, never in the browser's. */
+  scheduled_at: string;
+  duration_minutes: number;
+  status: AppointmentStatus;
+  source: AppointmentSource;
+  language: Language | null;
+  notes: string | null;
+  confirmed_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string | null;
+  reminder_sent_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Slot {
+  start: string;
+  end: string;
+  remaining_capacity: number;
+}
+
+export interface Availability {
+  date: string;
+  timezone: string;
+  is_open: boolean;
+  duration_minutes: number;
+  slots: Slot[];
+}
+
+/** `[open, close]` pairs per weekday key, e.g. `{"mon": [["09:00", "18:00"]]}`. */
+export type BusinessHours = Record<string, Array<[string, string]>>;
+
+export interface ScheduleConfig {
+  timezone: string;
+  slot_minutes: number;
+  capacity_per_slot: number;
+  min_notice_minutes: number;
+  max_advance_days: number;
+  hours: BusinessHours;
+  closed_dates: string[];
+}

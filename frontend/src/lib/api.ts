@@ -10,6 +10,9 @@
 
 import type {
   AgentLeaderboardEntry,
+  Appointment,
+  AppointmentStatus,
+  Availability,
   Business,
   Call,
   CallAnalytics,
@@ -29,6 +32,8 @@ import type {
   Plan,
   QualificationConfig,
   QuotaStatus,
+  ScheduleConfig,
+  Slot,
   Takeover,
   TokenPair,
   Usage,
@@ -244,6 +249,51 @@ export const api = {
         method: "POST",
         body: { text },
       }),
+  },
+
+  appointments: {
+    list: (params: {
+      limit?: number;
+      offset?: number;
+      status?: AppointmentStatus | "";
+      /** UTC instants. The caller converts the tenant's day into a window. */
+      starts_after?: string;
+      starts_before?: string;
+      search?: string;
+    }) => request<Page<Appointment>>("/appointments", { query: params }),
+    get: (id: string) => request<Appointment>(`/appointments/${id}`),
+    /** `date` is a plain `YYYY-MM-DD` in the tenant's timezone. */
+    availability: (date: string, durationMinutes?: number) =>
+      request<Availability>("/appointments/availability", {
+        query: { date, duration_minutes: durationMinutes },
+      }),
+    nextAvailable: (limit = 3) =>
+      request<Slot[]>("/appointments/next-available", { query: { limit } }),
+    book: (body: {
+      customer_name: string;
+      customer_phone: string;
+      scheduled_at: string;
+      duration_minutes?: number;
+      service?: string | null;
+      notes?: string | null;
+      override_hours?: boolean;
+    }) => request<Appointment>("/appointments", { method: "POST", body }),
+    reschedule: (id: string, scheduledAt: string, reason?: string) =>
+      request<Appointment>(`/appointments/${id}/reschedule`, {
+        method: "POST",
+        body: { scheduled_at: scheduledAt, reason: reason || null },
+      }),
+    cancel: (id: string, reason?: string) =>
+      request<Appointment>(`/appointments/${id}/cancel`, {
+        method: "POST",
+        body: { reason: reason || null },
+      }),
+    setStatus: (id: string, status: AppointmentStatus) =>
+      request<Appointment>(`/appointments/${id}/status`, {
+        method: "POST",
+        body: { status },
+      }),
+    schedule: () => request<ScheduleConfig>("/appointments/schedule"),
   },
 
   leads: {
