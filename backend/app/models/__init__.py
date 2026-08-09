@@ -13,6 +13,7 @@ from app.models.call import (
     PhoneNumber,
     WhatsAppHandoff,
 )
+from app.models.lead import Lead
 from app.models.voice_agent import Intent, VoiceAgent
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "DNDRegistry",
     "DailyAnalytics",
     "Intent",
+    "Lead",
     "PhoneNumber",
     "RefreshToken",
     "User",

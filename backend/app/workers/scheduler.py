@@ -107,6 +107,9 @@ DEFAULT_JOBS: tuple[ScheduledJob, ...] = (
     ScheduledJob(
         "close_missed_appointments", jobs.close_missed_appointments, interval_seconds=3600
     ),
+    # Frequent by design: a qualified lead loses value by the minute, and the
+    # job is a no-op on the ticks where the queue is empty.
+    ScheduledJob("push_qualified_leads", jobs.push_qualified_leads, interval_seconds=120),
     ScheduledJob("expire_trials", jobs.expire_trials, daily_at=time(0, 30)),
     ScheduledJob("finalize_billing_month", jobs.finalize_billing_month, daily_at=time(1, 0)),
     ScheduledJob("purge_expired_recordings", jobs.purge_expired_recordings, daily_at=time(2, 30)),

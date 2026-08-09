@@ -31,6 +31,8 @@ from app.models.enums import (
     CallResolution,
     HandoffReason,
     Language,
+    LeadStatus,
+    LeadTier,
     Sentiment,
     SpeakerRole,
 )
@@ -386,6 +388,17 @@ class ConversationEngine:
                     break
                 continue
 
+            if node.type is NodeType.QUALIFY_LEAD:
+                message, target = await self._qualify_lead_node(
+                    session, call, agent, node, state, language_guess
+                )
+                if message:
+                    spoken.append(message)
+                node_id = target
+                if node_id is None:
+                    break
+                continue
+
             if node.type is NodeType.HANDOFF:
                 message = node.message or _localised(
                     language_guess.language,
@@ -589,6 +602,57 @@ class ConversationEngine:
             ),
             node.on_unavailable or node.next,
         )
+
+    async def _qualify_lead_node(
+        self,
+        session: AsyncSession,
+        call: CallLog,
+        agent: VoiceAgent,
+        node,
+        state: CallState,
+        language_guess: nlu.LanguageGuess,
+    ) -> tuple[str | None, str | None]:
+        """Score the caller against BANT and route on the result.
+
+        The four answers were captured by earlier ``collect`` nodes, so this
+        node reads rather than asks. Scoring cannot fail on caller input — a
+        missing dimension simply scores zero — so the only routing decision is
+        which tier the lead landed in.
+        """
+        from app.services import lead_service
+        from app.services.bant import BantAnswers
+
+        language = language_guess.language
+        answers = BantAnswers(
+            budget=_optional_variable(state, node.budget_variable),
+            authority=_optional_variable(state, node.authority_variable),
+            need=_optional_variable(state, node.need_variable),
+            timeline=_optional_variable(state, node.timeline_variable),
+        )
+
+        lead = await lead_service.capture_from_call(
+            session,
+            call.business_id,
+            call_id=call.id,
+            agent_id=agent.id,
+            contact_name=_caller_name(state.variables.get(node.name_variable)),
+            contact_phone=_customer_number(call),
+            answers=answers,
+            interest=_optional_variable(state, node.interest_variable),
+            company=_optional_variable(state, node.company_variable),
+            language=language.value,
+        )
+
+        # The flow author routes on these, and the LLM sees them as context on
+        # any later turn that falls through to a free-form reply.
+        state.variables["lead_id"] = str(lead.id)
+        state.variables["lead_score"] = lead.score
+        state.variables["lead_tier"] = lead.tier
+
+        if lead.status == LeadStatus.QUALIFIED:
+            target = (node.on_hot if lead.tier == LeadTier.HOT else None) or node.next
+            return node.qualified_message, target
+        return node.unqualified_message, node.on_unqualified or node.next
 
     async def _call_api_node(self, node, state: CallState) -> bool:
         """Execute an ``api_call`` node against a business system."""

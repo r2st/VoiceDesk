@@ -42,6 +42,7 @@ class NodeType(StrEnum):
     CONDITION = "condition"
     API_CALL = "api_call"
     BOOK_APPOINTMENT = "book_appointment"
+    QUALIFY_LEAD = "qualify_lead"
     HANDOFF = "handoff"
     TRANSFER = "transfer"
     END = "end"
@@ -142,6 +143,34 @@ class BookAppointmentNode(_BaseNode):
     on_error: str | None = None
 
 
+class QualifyLeadNode(_BaseNode):
+    """Score the caller against BANT and route on the result (design doc §4.9).
+
+    The four answers come from earlier ``collect`` nodes; this node only reads
+    them, scores the lead and writes it to the pipeline. Routing is by tier so
+    a flow author can hand a hot lead straight to a salesperson while a cold
+    one gets a polite close.
+    """
+
+    type: Literal[NodeType.QUALIFY_LEAD] = NodeType.QUALIFY_LEAD
+    name_variable: Annotated[str, Field(max_length=60)] = "contact_name"
+    budget_variable: Annotated[str, Field(max_length=60)] = "budget"
+    authority_variable: Annotated[str, Field(max_length=60)] = "authority"
+    need_variable: Annotated[str, Field(max_length=60)] = "need"
+    timeline_variable: Annotated[str, Field(max_length=60)] = "timeline"
+    company_variable: Annotated[str | None, Field(default=None, max_length=60)] = None
+    interest_variable: Annotated[str | None, Field(default=None, max_length=60)] = None
+    #: Spoken when the lead qualifies. Left unset, the node says nothing and
+    #: the next node does the talking.
+    qualified_message: Annotated[str | None, Field(default=None, max_length=2000)] = None
+    unqualified_message: Annotated[str | None, Field(default=None, max_length=2000)] = None
+    next: str | None = None
+    #: Taken when the lead clears the tenant's ``hot_at`` threshold.
+    on_hot: str | None = None
+    #: Taken when the lead scores below the tenant's ``qualify_at`` threshold.
+    on_unqualified: str | None = None
+
+
 class HandoffNode(_BaseNode):
     """Escalate off the voice channel."""
 
@@ -172,6 +201,7 @@ FlowNode = Annotated[
     | ConditionNode
     | ApiCallNode
     | BookAppointmentNode
+    | QualifyLeadNode
     | HandoffNode
     | TransferNode
     | EndNode,
@@ -224,7 +254,16 @@ class ConversationFlow(BaseModel):
 def outgoing_edges(node) -> list[str]:
     """All node ids this node can move to."""
     edges: list[str] = []
-    for attr in ("next", "default", "if_true", "if_false", "on_error", "on_unavailable"):
+    for attr in (
+        "next",
+        "default",
+        "if_true",
+        "if_false",
+        "on_error",
+        "on_unavailable",
+        "on_hot",
+        "on_unqualified",
+    ):
         target = getattr(node, attr, None)
         if target:
             edges.append(target)
@@ -279,6 +318,8 @@ def default_flow(greeting: str, use_case: str = "customer_support") -> dict:
     """
     if use_case == "appointment_booking":
         return appointment_booking_flow(greeting)
+    if use_case == "lead_qualification":
+        return lead_qualification_flow(greeting)
     return {
         "start_node": "greeting",
         "nodes": [
@@ -376,4 +417,81 @@ def appointment_booking_flow(greeting: str) -> dict:
             },
         ],
         "variables": {"use_case": "appointment_booking"},
+    }
+
+
+def lead_qualification_flow(greeting: str) -> dict:
+    """A working BANT flow: ask the four questions, score, then route on tier.
+
+    The ``qualify_lead`` node reads the answers the ``collect`` nodes gathered
+    and writes a scored lead into the pipeline, so a hot prospect is transferred
+    to a salesperson while the call is still live rather than waiting in a queue
+    for someone to notice the transcript.
+    """
+    return {
+        "start_node": "greeting",
+        "nodes": [
+            {"id": "greeting", "type": "message", "text": greeting, "next": "ask_name"},
+            {
+                "id": "ask_name",
+                "type": "collect",
+                "prompt": "May I have your name, please?",
+                "variable": "contact_name",
+                "next": "ask_need",
+            },
+            {
+                "id": "ask_need",
+                "type": "collect",
+                "prompt": "What are you looking to solve?",
+                "variable": "need",
+                "next": "ask_timeline",
+            },
+            {
+                "id": "ask_timeline",
+                "type": "collect",
+                "prompt": "When are you hoping to get started?",
+                "variable": "timeline",
+                "next": "ask_budget",
+            },
+            {
+                "id": "ask_budget",
+                "type": "collect",
+                "prompt": "Do you have a budget in mind for this?",
+                "variable": "budget",
+                "next": "ask_authority",
+            },
+            {
+                "id": "ask_authority",
+                "type": "collect",
+                "prompt": "And who else is involved in the decision?",
+                "variable": "authority",
+                "next": "qualify",
+            },
+            {
+                "id": "qualify",
+                "type": "qualify_lead",
+                "next": "wrap_up",
+                # A hot lead gets a firmer promise than everyone else. The
+                # owner swaps this for a ``transfer`` node once they have a
+                # sales number to dial — a starter flow cannot invent one, and
+                # a transfer to an empty number would drop the best caller of
+                # the day.
+                "on_hot": "sales_priority",
+                "on_unqualified": "wrap_up",
+                "unqualified_message": "Thank you — I have noted your details.",
+            },
+            {
+                "id": "sales_priority",
+                "type": "message",
+                "text": "Our sales team will call you back within the hour.",
+                "next": "wrap_up",
+            },
+            {
+                "id": "wrap_up",
+                "type": "end",
+                "text": "Thank you for your time. Someone will be in touch shortly.",
+                "disposition": "resolved",
+            },
+        ],
+        "variables": {"use_case": "lead_qualification"},
     }

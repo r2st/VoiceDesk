@@ -40,12 +40,19 @@ from app.models.enums import (
     UserRole,
 )
 from app.models.voice_agent import VoiceAgent
+from app.services import crm as crm_module
 from app.services import llm as llm_module
 from app.services import storage as storage_module
 from app.services import telephony, whatsapp
 from app.services.conversation_engine import set_engine
 from app.services.flow import default_flow
-from tests.fakes import FakeLLMClient, FakeRedis, FakeStorage, FakeWhatsAppProvider
+from tests.fakes import (
+    FakeCrmClient,
+    FakeLLMClient,
+    FakeRedis,
+    FakeStorage,
+    FakeWhatsAppProvider,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -140,6 +147,15 @@ def fake_whatsapp() -> Iterator[FakeWhatsAppProvider]:
     whatsapp.set_whatsapp_provider(provider)
     yield provider
     whatsapp.set_whatsapp_provider(None)
+
+
+@pytest.fixture(autouse=True)
+def fake_crm() -> Iterator[FakeCrmClient]:
+    """In-process CRM endpoint. Tests assert against ``.pushed``."""
+    client = FakeCrmClient()
+    crm_module.set_crm_client(client)
+    yield client
+    crm_module.set_crm_client(None)
 
 
 @pytest.fixture(autouse=True)

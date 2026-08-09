@@ -84,6 +84,12 @@ class Settings(BaseSettings):
     gosumo_api_key: str = ""
     whatsapp_handoff_confidence_threshold: float = 0.70
 
+    # CRM handoff for qualified leads
+    crm_push_enabled: bool = True
+    #: A lead the CRM has rejected this many times is left alone; the failure
+    #: is a misconfiguration to fix, not a delivery to keep retrying.
+    crm_max_attempts: int = 10
+
     # TRAI compliance
     trai_calling_hour_start: int = 9
     trai_calling_hour_end: int = 21

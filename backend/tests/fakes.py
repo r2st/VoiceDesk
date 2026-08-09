@@ -12,6 +12,7 @@ import json
 import time
 from typing import Any
 
+from app.services.crm import CrmClient, CrmConfig, CrmResult
 from app.services.llm import LLMMessage, LLMResponse
 from app.services.storage import StoredObject, decrypt_bytes, encrypt_bytes
 from app.services.whatsapp import WhatsAppMessage, WhatsAppProvider, WhatsAppResult
@@ -304,3 +305,31 @@ class Clock:
     @staticmethod
     def real() -> float:
         return time.perf_counter()
+
+
+class FakeCrmClient(CrmClient):
+    """Records CRM pushes; can be told to refuse or to blow up.
+
+    The three outcomes are kept separate because the push job treats them
+    differently: a refusal is the tenant's endpoint answering, a raise is it
+    being unreachable, and neither should look like a delivery.
+    """
+
+    name = "fake"
+
+    def __init__(self) -> None:
+        self.pushed: list[tuple[CrmConfig, str]] = []
+        #: Endpoint answers, but rejects the lead.
+        self.fail = False
+        #: Endpoint is unreachable — the push itself raises.
+        self.raise_error = False
+        self.counter = 0
+
+    async def push(self, config: CrmConfig, lead: Any) -> CrmResult:
+        if self.raise_error:
+            raise RuntimeError("Injected CRM failure")
+        self.pushed.append((config, str(lead.id)))
+        if self.fail:
+            return CrmResult(delivered=False, error="injected CRM rejection")
+        self.counter += 1
+        return CrmResult(delivered=True, reference=f"crm-{self.counter}")

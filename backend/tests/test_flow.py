@@ -214,6 +214,7 @@ class TestFlowEndpoint:
             "condition",
             "api_call",
             "book_appointment",
+            "qualify_lead",
             "handoff",
             "transfer",
             "end",

@@ -156,6 +156,53 @@ class AppointmentSource(StrEnum):
     API = "api"
 
 
+class BANTDimension(StrEnum):
+    """The four things a qualification call is trying to establish (§4.9)."""
+
+    BUDGET = "budget"
+    AUTHORITY = "authority"
+    NEED = "need"
+    TIMELINE = "timeline"
+
+
+class LeadStatus(StrEnum):
+    NEW = "new"
+    QUALIFIED = "qualified"
+    DISQUALIFIED = "disqualified"
+    CONTACTED = "contacted"
+    CONVERTED = "converted"
+    LOST = "lost"
+
+    @classmethod
+    def open(cls) -> set[LeadStatus]:
+        """Statuses a salesperson still has work to do on."""
+        return {cls.NEW, cls.QUALIFIED, cls.CONTACTED}
+
+
+class LeadTier(StrEnum):
+    """What the BANT score means in words a salesperson can act on."""
+
+    HOT = "hot"
+    WARM = "warm"
+    COLD = "cold"
+    UNQUALIFIED = "unqualified"
+
+
+class LeadSource(StrEnum):
+    VOICE_CALL = "voice_call"
+    DASHBOARD = "dashboard"
+    WHATSAPP = "whatsapp"
+    API = "api"
+
+
+class CrmPushStatus(StrEnum):
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+    #: The tenant has no CRM webhook configured, so there is nothing to push.
+    NOT_CONFIGURED = "not_configured"
+
+
 class HandoffReason(StrEnum):
     LOW_CONFIDENCE = "low_confidence"
     CALLER_REQUEST = "caller_request"

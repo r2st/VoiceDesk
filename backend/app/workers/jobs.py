@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.business import Business, RefreshToken
-from app.models.enums import AppointmentStatus, BusinessStatus
+from app.models.enums import AppointmentStatus, BusinessStatus, CrmPushStatus
 from app.services import analytics_service, billing_service, recording_service
 
 logger = get_logger(__name__)
@@ -282,3 +282,74 @@ async def close_missed_appointments(
         await session.flush()
         logger.info("Closed %s missed appointment(s) as no-shows", len(overdue))
     return JobResult("close_missed_appointments", {"no_shows": len(overdue)})
+
+
+# --------------------------------------------------------------------------- #
+# Leads
+# --------------------------------------------------------------------------- #
+async def push_qualified_leads(session: AsyncSession, *, limit: int = 200) -> JobResult:
+    """Deliver qualified leads to each tenant's CRM (design doc §4.6).
+
+    A push is attempted per lead rather than per tenant so one unreachable CRM
+    delays only its own tenant's leads. Every outcome — delivered, refused,
+    unreachable — is written back to the row, so the pipeline view can show a
+    salesperson that a lead has not reached their CRM instead of leaving them
+    to discover it when the follow-up never happens.
+    """
+    from app.services import crm, lead_service
+
+    due = await lead_service.due_for_crm_push(
+        session, limit=limit, max_attempts=settings.crm_max_attempts
+    )
+    if not due:
+        return JobResult("push_qualified_leads", {"sent": 0, "failed": 0, "skipped": 0})
+
+    client = crm.get_crm_client()
+    configs: dict[uuid.UUID, crm.CrmConfig | None] = {}
+    sent = failed = skipped = 0
+
+    for lead in due:
+        if lead.business_id not in configs:
+            business = await session.get(Business, lead.business_id)
+            configs[lead.business_id] = (
+                crm.load_crm_config(business.settings_json)
+                if business is not None and business.deleted_at is None
+                else None
+            )
+        config = configs[lead.business_id]
+
+        # No destination is a settled state, not a failure: parking the lead as
+        # NOT_CONFIGURED keeps it out of every later pass until the tenant
+        # actually sets a webhook up.
+        if config is None or not config.configured:
+            lead.crm_status = CrmPushStatus.NOT_CONFIGURED
+            skipped += 1
+            continue
+
+        if config.min_score is not None and lead.score < config.min_score:
+            lead.crm_status = CrmPushStatus.NOT_CONFIGURED
+            lead.crm_error = f"Below the tenant's CRM floor of {config.min_score}."
+            skipped += 1
+            continue
+
+        lead.crm_attempts += 1
+        try:
+            result = await client.push(config, lead)
+        except Exception as exc:  # a broken client must not strand the batch
+            logger.warning("CRM push for lead %s raised: %s", lead.id, exc)
+            result = crm.CrmResult(delivered=False, error=f"{type(exc).__name__}: {exc}"[:500])
+
+        if result.delivered:
+            lead.crm_status = CrmPushStatus.SENT
+            lead.crm_pushed_at = datetime.now(UTC)
+            lead.crm_reference = result.reference
+            lead.crm_error = None
+            sent += 1
+        else:
+            lead.crm_status = CrmPushStatus.FAILED
+            lead.crm_error = (result.error or "CRM push failed.")[:500]
+            failed += 1
+
+    await session.flush()
+    logger.info("CRM push: %s sent, %s failed, %s skipped", sent, failed, skipped)
+    return JobResult("push_qualified_leads", {"sent": sent, "failed": failed, "skipped": skipped})
