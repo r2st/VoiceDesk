@@ -64,8 +64,14 @@ async def call_analytics(
     series = await analytics_service.call_timeseries(
         session, context.business_id, date_from=start, date_to=end, agent_id=agent_id
     )
-    languages = await analytics_service.language_breakdown(session, context.business_id, days=span)
-    intents = await analytics_service.intent_breakdown(session, context.business_id, days=span)
+    # The breakdowns take the same window and agent filter as the series, so
+    # every number in the payload describes one thing.
+    languages = await analytics_service.language_breakdown(
+        session, context.business_id, date_from=start, date_to=end, agent_id=agent_id
+    )
+    intents = await analytics_service.intent_breakdown(
+        session, context.business_id, date_from=start, date_to=end, agent_id=agent_id
+    )
 
     points = [TimeseriesPoint.model_validate(p) for p in series]
     return CallAnalyticsOut(

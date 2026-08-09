@@ -28,6 +28,24 @@ def day_bounds(day: date) -> tuple[datetime, datetime]:
     return start.astimezone(UTC), (start + timedelta(days=1)).astimezone(UTC)
 
 
+def _today() -> date:
+    return datetime.now(ZoneInfo(settings.trai_timezone)).date()
+
+
+def _window(
+    days: int, date_from: date | None = None, date_to: date | None = None
+) -> tuple[datetime, datetime]:
+    """UTC bounds of either an explicit date range or the trailing ``days``.
+
+    An explicit range wins, so a breakdown asked for alongside a time series
+    describes the same window the series does rather than the last N days from
+    today.
+    """
+    end_day = date_to or _today()
+    start_day = date_from or (end_day - timedelta(days=days - 1))
+    return day_bounds(start_day)[0], day_bounds(end_day)[1]
+
+
 async def rollup_day(
     session: AsyncSession,
     business_id: uuid.UUID,
@@ -134,10 +152,8 @@ async def dashboard_summary(
     session: AsyncSession, business_id: uuid.UUID, *, days: int = 30
 ) -> dict:
     """Headline metrics for the dashboard home screen."""
-    tz = ZoneInfo(settings.trai_timezone)
-    today = datetime.now(tz).date()
-    start, _ = day_bounds(today - timedelta(days=days - 1))
-    _, end = day_bounds(today)
+    today = _today()
+    start, end = _window(days)
     prev_start, _ = day_bounds(today - timedelta(days=days * 2 - 1))
     _, prev_end = day_bounds(today - timedelta(days=days))
 
@@ -270,10 +286,7 @@ async def agent_leaderboard(
     session: AsyncSession, business_id: uuid.UUID, *, days: int = 30, limit: int = 10
 ) -> list[dict]:
     """Rank agents by call volume with their quality metrics."""
-    tz = ZoneInfo(settings.trai_timezone)
-    today = datetime.now(tz).date()
-    start, _ = day_bounds(today - timedelta(days=days - 1))
-    _, end = day_bounds(today)
+    start, end = _window(days)
 
     rows = (
         await session.execute(
@@ -322,50 +335,61 @@ async def agent_leaderboard(
 
 
 async def language_breakdown(
-    session: AsyncSession, business_id: uuid.UUID, *, days: int = 30
+    session: AsyncSession,
+    business_id: uuid.UUID,
+    *,
+    days: int = 30,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    agent_id: uuid.UUID | None = None,
 ) -> dict[str, int]:
-    tz = ZoneInfo(settings.trai_timezone)
-    today = datetime.now(tz).date()
-    start, _ = day_bounds(today - timedelta(days=days - 1))
-    _, end = day_bounds(today)
+    start, end = _window(days, date_from, date_to)
 
-    rows = (
-        await session.execute(
-            select(CallLog.language, func.count(CallLog.id))
-            .where(
-                CallLog.business_id == business_id,
-                CallLog.deleted_at.is_(None),
-                CallLog.language.is_not(None),
-                CallLog.created_at >= start,
-                CallLog.created_at < end,
-            )
-            .group_by(CallLog.language)
+    stmt = (
+        select(CallLog.language, func.count(CallLog.id))
+        .where(
+            CallLog.business_id == business_id,
+            CallLog.deleted_at.is_(None),
+            CallLog.language.is_not(None),
+            CallLog.created_at >= start,
+            CallLog.created_at < end,
         )
-    ).all()
+        .group_by(CallLog.language)
+    )
+    if agent_id is not None:
+        stmt = stmt.where(CallLog.agent_id == agent_id)
+
+    rows = (await session.execute(stmt)).all()
     return {language: int(count) for language, count in rows}
 
 
 async def intent_breakdown(
-    session: AsyncSession, business_id: uuid.UUID, *, days: int = 30, limit: int = 20
+    session: AsyncSession,
+    business_id: uuid.UUID,
+    *,
+    days: int = 30,
+    limit: int = 20,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    agent_id: uuid.UUID | None = None,
 ) -> list[dict]:
-    tz = ZoneInfo(settings.trai_timezone)
-    today = datetime.now(tz).date()
-    start, _ = day_bounds(today - timedelta(days=days - 1))
-    _, end = day_bounds(today)
+    start, end = _window(days, date_from, date_to)
 
-    rows = (
-        await session.execute(
-            select(CallLog.primary_intent, func.count(CallLog.id))
-            .where(
-                CallLog.business_id == business_id,
-                CallLog.deleted_at.is_(None),
-                CallLog.primary_intent.is_not(None),
-                CallLog.created_at >= start,
-                CallLog.created_at < end,
-            )
-            .group_by(CallLog.primary_intent)
-            .order_by(func.count(CallLog.id).desc())
-            .limit(limit)
+    stmt = (
+        select(CallLog.primary_intent, func.count(CallLog.id))
+        .where(
+            CallLog.business_id == business_id,
+            CallLog.deleted_at.is_(None),
+            CallLog.primary_intent.is_not(None),
+            CallLog.created_at >= start,
+            CallLog.created_at < end,
         )
-    ).all()
+        .group_by(CallLog.primary_intent)
+        .order_by(func.count(CallLog.id).desc())
+        .limit(limit)
+    )
+    if agent_id is not None:
+        stmt = stmt.where(CallLog.agent_id == agent_id)
+
+    rows = (await session.execute(stmt)).all()
     return [{"intent": intent, "count": int(count)} for intent, count in rows]

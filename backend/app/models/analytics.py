@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -64,7 +65,26 @@ class DailyAnalytics(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin)
     intent_breakdown: Mapped[dict] = mapped_column(JSONBType, default=dict, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint("business_id", "agent_id", "date", name="uq_analytics_scope_date"),
+        # Two partial indexes rather than one UNIQUE(business_id, agent_id,
+        # date): SQL treats NULLs as distinct, so a plain constraint would let
+        # two concurrent rollup runs each insert their own business-wide row.
+        Index(
+            "uq_analytics_agent_date_active",
+            "business_id",
+            "agent_id",
+            "date",
+            unique=True,
+            postgresql_where=text("agent_id IS NOT NULL AND deleted_at IS NULL"),
+            sqlite_where=text("agent_id IS NOT NULL AND deleted_at IS NULL"),
+        ),
+        Index(
+            "uq_analytics_business_date_active",
+            "business_id",
+            "date",
+            unique=True,
+            postgresql_where=text("agent_id IS NULL AND deleted_at IS NULL"),
+            sqlite_where=text("agent_id IS NULL AND deleted_at IS NULL"),
+        ),
         Index("ix_analytics_business_date", "business_id", "date"),
     )
 
