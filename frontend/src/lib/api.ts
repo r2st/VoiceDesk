@@ -38,6 +38,7 @@ import type {
   TokenPair,
   Usage,
   User,
+  UserRole,
   VoiceAgent,
 } from "./types";
 
@@ -198,6 +199,40 @@ export const api = {
         body: { refresh_token: refreshToken },
         retryOnUnauthorized: false,
       }),
+    /** Plan and status are deliberately not editable here — billing owns them. */
+    updateBusiness: (patch: {
+      name?: string;
+      phone?: string;
+      industry?: string | null;
+      gstin?: string | null;
+      address?: string | null;
+      city?: string | null;
+      state?: string | null;
+    }) => request<Business>("/auth/business", { method: "PATCH", body: patch }),
+    /** Every signed-in change ends the session, so the caller must sign out. */
+    changePassword: (currentPassword: string, newPassword: string) =>
+      request<{ message: string }>("/auth/change-password", {
+        method: "POST",
+        body: { current_password: currentPassword, new_password: newPassword },
+        retryOnUnauthorized: false,
+      }),
+  },
+
+  team: {
+    list: () => request<User[]>("/auth/users"),
+    invite: (body: {
+      email: string;
+      full_name: string;
+      password: string;
+      role: UserRole;
+      phone?: string | null;
+    }) => request<User>("/auth/users", { method: "POST", body }),
+    update: (
+      id: string,
+      patch: { full_name?: string; role?: UserRole; is_active?: boolean; phone?: string | null },
+    ) => request<User>(`/auth/users/${id}`, { method: "PATCH", body: patch }),
+    remove: (id: string) =>
+      request<void>(`/auth/users/${id}`, { method: "DELETE" }),
   },
 
   analytics: {

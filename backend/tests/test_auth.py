@@ -814,6 +814,26 @@ class TestTeamEndpoints:
         assert allowed.status_code == 200
         assert allowed.json()["city"] == "Nagpur"
 
+    async def test_every_editable_field_is_readable_back(
+        self, client: AsyncClient, owner_headers: dict
+    ):
+        # A settings form round-trips what it saved. A field the API accepts but
+        # never returns silently blanks itself the next time the form loads.
+        payload = {
+            "name": "Sunrise Diagnostics LLP",
+            "industry": "diagnostics",
+            "gstin": "27AAAAA0000A1Z5",
+            "address": "3rd floor, Kalyani Nagar",
+            "city": "Pune",
+            "state": "Maharashtra",
+        }
+        response = await client.patch(
+            "/api/v1/auth/business", headers=owner_headers, json=payload
+        )
+
+        assert response.status_code == 200
+        assert {key: response.json()[key] for key in payload} == payload
+
     async def test_business_update_normalises_the_phone(
         self, client: AsyncClient, owner_headers: dict
     ):

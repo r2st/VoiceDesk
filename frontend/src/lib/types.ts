@@ -74,6 +74,7 @@ export interface Business {
   email: string;
   industry: string | null;
   gstin: string | null;
+  address: string | null;
   city: string | null;
   state: string | null;
   plan: PlanTier;

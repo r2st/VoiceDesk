@@ -81,6 +81,7 @@ class BusinessOut(ORMModel):
     email: str
     industry: str | None = None
     gstin: str | None = None
+    address: str | None = None
     city: str | None = None
     state: str | None = None
     plan: PlanTier

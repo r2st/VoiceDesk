@@ -17,6 +17,7 @@ const NAV = [
   { href: "/agents", label: "Agents" },
   { href: "/numbers", label: "Numbers" },
   { href: "/billing", label: "Billing" },
+  { href: "/settings", label: "Settings" },
 ];
 
 const STATUS_TONE: Record<string, BadgeTone> = {
