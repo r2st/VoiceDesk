@@ -862,3 +862,144 @@ def _future(hour: int) -> datetime:
     while candidate.weekday() == 6:  # Sunday is closed by default
         candidate += timedelta(days=1)
     return candidate
+
+
+# --------------------------------------------------------------------------- #
+# Scheduled maintenance
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+class TestAppointmentJobs:
+    async def test_a_booking_inside_the_lead_window_is_reminded_once(
+        self, session: AsyncSession, business: Business, fake_whatsapp
+    ) -> None:
+        from app.workers import jobs
+
+        appointment = await book(session, business, scheduled_at=at(15, 0))
+
+        first = await jobs.send_appointment_reminders(session, now=at(9, 0))
+        second = await jobs.send_appointment_reminders(session, now=at(9, 30))
+
+        assert first.detail == {"sent": 1, "failed": 0}
+        assert second.detail == {"sent": 0, "failed": 0}
+        assert appointment.reminder_sent_at is not None
+        assert len(fake_whatsapp.sent) == 1
+
+    async def test_the_reminder_names_the_business_and_the_local_time(
+        self, session: AsyncSession, business: Business, fake_whatsapp
+    ) -> None:
+        from app.workers import jobs
+
+        await book(session, business, scheduled_at=at(15, 0), service="Blood test")
+        await jobs.send_appointment_reminders(session, now=at(9, 0))
+
+        body = fake_whatsapp.sent[0].body
+        assert business.name in body
+        assert "Blood test" in body
+        assert "03:00 PM" in body
+
+    async def test_a_booking_beyond_the_lead_window_waits(
+        self, session: AsyncSession, business: Business, fake_whatsapp
+    ) -> None:
+        from app.workers import jobs
+
+        await book(session, business, scheduled_at=at(11, 0, day=MONDAY + timedelta(days=5)))
+
+        result = await jobs.send_appointment_reminders(session, now=at(9, 0))
+
+        assert result.detail["sent"] == 0
+        assert fake_whatsapp.sent == []
+
+    async def test_a_cancelled_booking_is_not_reminded(
+        self, session: AsyncSession, business: Business, fake_whatsapp
+    ) -> None:
+        from app.workers import jobs
+
+        appointment = await book(session, business, scheduled_at=at(15, 0))
+        await appointment_service.cancel(session, business.id, appointment.id)
+
+        await jobs.send_appointment_reminders(session, now=at(9, 0))
+
+        assert fake_whatsapp.sent == []
+
+    async def test_a_provider_failure_leaves_the_reminder_to_retry(
+        self, session: AsyncSession, business: Business, fake_whatsapp
+    ) -> None:
+        from app.workers import jobs
+
+        appointment = await book(session, business, scheduled_at=at(15, 0))
+        fake_whatsapp.raise_error = True
+
+        result = await jobs.send_appointment_reminders(session, now=at(9, 0))
+
+        assert result.detail == {"sent": 0, "failed": 1}
+        assert appointment.reminder_sent_at is None
+
+    async def test_a_rejected_send_is_counted_but_not_retried_forever(
+        self, session: AsyncSession, business: Business, fake_whatsapp
+    ) -> None:
+        """A courtesy message is not worth re-sending on every tick for a day."""
+        from app.workers import jobs
+
+        appointment = await book(session, business, scheduled_at=at(15, 0))
+        fake_whatsapp.fail = True
+
+        result = await jobs.send_appointment_reminders(session, now=at(9, 0))
+
+        assert result.detail == {"sent": 0, "failed": 1}
+        assert appointment.reminder_sent_at is not None
+
+    async def test_a_slot_well_past_its_end_becomes_a_no_show(
+        self, session: AsyncSession, business: Business
+    ) -> None:
+        from app.workers import jobs
+
+        appointment = await book(session, business, scheduled_at=at(11, 0))
+
+        result = await jobs.close_missed_appointments(session, now=at(17, 0))
+
+        assert result.detail == {"no_shows": 1}
+        assert appointment.status == AppointmentStatus.NO_SHOW
+
+    async def test_a_slot_inside_the_grace_period_is_left_alone(
+        self, session: AsyncSession, business: Business
+    ) -> None:
+        from app.workers import jobs
+
+        appointment = await book(session, business, scheduled_at=at(11, 0))
+
+        result = await jobs.close_missed_appointments(session, now=at(12, 0))
+
+        assert result.detail == {"no_shows": 0}
+        assert appointment.status == AppointmentStatus.SCHEDULED
+
+    async def test_a_long_appointment_is_measured_from_its_end(
+        self, session: AsyncSession, business: Business
+    ) -> None:
+        """Both start at 09:30; at 13:30 only the short one has been over long enough."""
+        from app.workers import jobs
+
+        business.settings_json = {"appointments": {"capacity_per_slot": 2}}
+        await session.flush()
+        long_one = await book(session, business, scheduled_at=at(9, 30), duration_minutes=180)
+        short_one = await book(
+            session, business, scheduled_at=at(9, 30), duration_minutes=30, customer_name="Ravi K"
+        )
+
+        await jobs.close_missed_appointments(session, now=at(13, 30))
+
+        assert long_one.status == AppointmentStatus.SCHEDULED
+        assert short_one.status == AppointmentStatus.NO_SHOW
+
+    async def test_an_outcome_staff_already_recorded_is_never_overwritten(
+        self, session: AsyncSession, business: Business
+    ) -> None:
+        from app.workers import jobs
+
+        appointment = await book(session, business, scheduled_at=at(11, 0))
+        await appointment_service.set_status(
+            session, business.id, appointment.id, AppointmentStatus.COMPLETED
+        )
+
+        await jobs.close_missed_appointments(session, now=at(17, 0))
+
+        assert appointment.status == AppointmentStatus.COMPLETED

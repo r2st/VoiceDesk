@@ -194,10 +194,18 @@ class FakeWhatsAppProvider(WhatsAppProvider):
 
     def __init__(self) -> None:
         self.sent: list[WhatsAppMessage] = []
+        #: Provider answers, but rejects the message.
         self.fail = False
+        #: Provider is unreachable — the call itself blows up. Distinct from
+        #: ``fail`` because callers treat the two outcomes differently.
+        self.raise_error = False
         self.counter = 0
 
     async def send(self, message: WhatsAppMessage) -> WhatsAppResult:
+        if self.raise_error:
+            from app.core.errors import ExternalServiceError
+
+            raise ExternalServiceError("Injected WhatsApp failure")
         self.sent.append(message)
         if self.fail:
             return WhatsAppResult(message_id="", accepted=False, error="injected provider failure")

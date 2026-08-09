@@ -99,6 +99,14 @@ class ScheduledJob:
 DEFAULT_JOBS: tuple[ScheduledJob, ...] = (
     ScheduledJob("rollup_analytics", jobs.rollup_analytics, interval_seconds=3600),
     ScheduledJob("refresh_billing_usage", jobs.refresh_billing_usage, interval_seconds=1800),
+    # Hourly rather than daily: a booking made this afternoon for tomorrow
+    # morning still gets its reminder while there is time to act on it.
+    ScheduledJob(
+        "send_appointment_reminders", jobs.send_appointment_reminders, interval_seconds=3600
+    ),
+    ScheduledJob(
+        "close_missed_appointments", jobs.close_missed_appointments, interval_seconds=3600
+    ),
     ScheduledJob("expire_trials", jobs.expire_trials, daily_at=time(0, 30)),
     ScheduledJob("finalize_billing_month", jobs.finalize_billing_month, daily_at=time(1, 0)),
     ScheduledJob("purge_expired_recordings", jobs.purge_expired_recordings, daily_at=time(2, 30)),

@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.business import Business, RefreshToken
-from app.models.enums import BusinessStatus
+from app.models.enums import AppointmentStatus, BusinessStatus
 from app.services import analytics_service, billing_service, recording_service
 
 logger = get_logger(__name__)
@@ -206,3 +206,79 @@ async def prune_refresh_tokens(session: AsyncSession, *, grace_days: int = 7) ->
         await session.flush()
         logger.info("Pruned %s spent refresh token(s)", deleted)
     return JobResult("prune_refresh_tokens", {"deleted": deleted})
+
+
+# --------------------------------------------------------------------------- #
+# Appointments
+# --------------------------------------------------------------------------- #
+async def send_appointment_reminders(
+    session: AsyncSession, *, now: datetime | None = None
+) -> JobResult:
+    """WhatsApp a reminder for each booking starting in the next day.
+
+    ``reminder_sent_at`` is stamped whether or not the provider accepted the
+    message: a reminder is a courtesy, and retrying a failed send on every tick
+    for the next 24 hours would spend far more than it recovers. A send that
+    raises leaves the stamp unset so the next run tries once more.
+    """
+    from app.services import appointment_service
+    from app.services.whatsapp import WhatsAppMessage, get_whatsapp_provider
+
+    due = await appointment_service.due_for_reminder(session, now=now)
+    if not due:
+        return JobResult("send_appointment_reminders", {"sent": 0, "failed": 0})
+
+    provider = get_whatsapp_provider()
+    businesses: dict[uuid.UUID, Business] = {}
+    sent = failed = 0
+
+    for appointment in due:
+        business = businesses.get(appointment.business_id)
+        if business is None:
+            business = await session.get(Business, appointment.business_id)
+            if business is None or business.deleted_at is not None:
+                continue
+            businesses[appointment.business_id] = business
+
+        config = appointment_service.scheduling.load_schedule_config(business.settings_json)
+        try:
+            result = await provider.send(
+                WhatsAppMessage(
+                    to_number=appointment.customer_phone,
+                    body=appointment_service.reminder_text(appointment, business, config.timezone),
+                    context={"appointment_id": str(appointment.id), "kind": "reminder"},
+                )
+            )
+        except Exception as exc:
+            logger.warning("Reminder for appointment %s failed: %s", appointment.id, exc)
+            failed += 1
+            continue
+
+        appointment.reminder_sent_at = datetime.now(UTC)
+        sent += result.accepted
+        failed += not result.accepted
+
+    await session.flush()
+    logger.info("Appointment reminders: %s sent, %s failed", sent, failed)
+    return JobResult("send_appointment_reminders", {"sent": sent, "failed": failed})
+
+
+async def close_missed_appointments(
+    session: AsyncSession, *, now: datetime | None = None
+) -> JobResult:
+    """Mark bookings nobody closed as no-shows once their slot is well past.
+
+    Staff who mark the outcome themselves always win — only appointments still
+    sitting in ``scheduled``/``confirmed`` hours after the slot ended are
+    touched, so the calendar reflects reality instead of accumulating rows that
+    look perpetually upcoming.
+    """
+    from app.services import appointment_service
+
+    overdue = await appointment_service.overdue_without_outcome(session, now=now)
+    for appointment in overdue:
+        appointment.status = AppointmentStatus.NO_SHOW
+    if overdue:
+        await session.flush()
+        logger.info("Closed %s missed appointment(s) as no-shows", len(overdue))
+    return JobResult("close_missed_appointments", {"no_shows": len(overdue)})

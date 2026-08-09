@@ -15,6 +15,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -618,3 +619,82 @@ def _require_active(appointment: Appointment, action: str) -> None:
 
 def _day_lock(business_id: uuid.UUID, day: date) -> str:
     return f"appointments:{business_id}:{day.isoformat()}"
+
+
+# --------------------------------------------------------------------------- #
+# Scheduled maintenance
+# --------------------------------------------------------------------------- #
+#: Appointments are reminded once, this far ahead of the slot.
+REMINDER_LEAD_HOURS = 24
+
+#: How long after a slot ends before an unclosed booking counts as a no-show.
+#: Wide enough that staff who close the appointment late are not overruled.
+NO_SHOW_GRACE_HOURS = 2
+
+
+async def due_for_reminder(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    lead_hours: int = REMINDER_LEAD_HOURS,
+    limit: int = 500,
+) -> list[Appointment]:
+    """Live bookings starting within the lead window that were never reminded."""
+    moment = ensure_utc(now or datetime.now(UTC))
+    stmt = (
+        select(Appointment)
+        .where(
+            Appointment.deleted_at.is_(None),
+            Appointment.reminder_sent_at.is_(None),
+            Appointment.scheduled_at > moment,
+            Appointment.scheduled_at <= moment + timedelta(hours=lead_hours),
+            Appointment.status.in_([s.value for s in AppointmentStatus.active()]),
+        )
+        .order_by(Appointment.scheduled_at.asc())
+        .limit(limit)
+    )
+    return list((await session.execute(stmt)).scalars().all())
+
+
+async def overdue_without_outcome(
+    session: AsyncSession,
+    *,
+    now: datetime | None = None,
+    grace_hours: int = NO_SHOW_GRACE_HOURS,
+    limit: int = 500,
+) -> list[Appointment]:
+    """Bookings whose slot ended long enough ago that staff should have closed them.
+
+    The end of the slot is ``scheduled_at + duration``, which SQL cannot index,
+    so the predicate is on ``scheduled_at`` with the longest bookable
+    appointment subtracted; the exact end is checked in Python.
+    """
+    moment = ensure_utc(now or datetime.now(UTC))
+    cutoff = moment - timedelta(hours=grace_hours)
+    stmt = (
+        select(Appointment)
+        .where(
+            Appointment.deleted_at.is_(None),
+            Appointment.scheduled_at <= cutoff,
+            Appointment.status.in_([s.value for s in AppointmentStatus.active()]),
+        )
+        .order_by(Appointment.scheduled_at.asc())
+        .limit(limit)
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    return [
+        row
+        for row in rows
+        if ensure_utc(row.scheduled_at) + timedelta(minutes=row.duration_minutes) <= cutoff
+    ]
+
+
+def reminder_text(appointment: Appointment, business: Business, timezone: str) -> str:
+    """The WhatsApp reminder body. Kept short — it is read on a phone."""
+    local = ensure_utc(appointment.scheduled_at).astimezone(ZoneInfo(timezone))
+    what = f" for {appointment.service}" if appointment.service else ""
+    return (
+        f"Reminder from {business.name}: your appointment{what} is on "
+        f"{local:%A %d %B} at {local:%I:%M %p}. "
+        "Reply here to reschedule or cancel."
+    )
