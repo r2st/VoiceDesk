@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.errors import ComplianceError, ConflictError, NotFoundError, ValidationError
+from app.core.events import EventType, emit
 from app.core.logging import get_logger, mask_phone
 from app.core.tenancy import get_owned_or_404, tenant_select
 from app.models.call import CallLog, PhoneNumber
@@ -234,6 +235,7 @@ async def handle_inbound_call(
     session.add(call)
     await session.flush()
     logger.info("Inbound call %s from %s", call.id, mask_phone(from_number))
+    await _publish_status(call, EventType.CALL_STARTED)
     return call, agent
 
 
@@ -289,8 +291,14 @@ async def apply_webhook_event(
 
     if event.status in CallStatus.terminal():
         await billing_service.meter_call(session, call)
+        await _close_open_takeover(session, call)
 
     logger.info("Call %s: %s -> %s", call.id, previous, call.status)
+    await _publish_status(
+        call,
+        EventType.CALL_ENDED if call.is_terminal else EventType.CALL_STATUS,
+        previous=previous,
+    )
     return call, False
 
 
@@ -402,7 +410,37 @@ async def hangup_call(
 
     await session.flush()
     await billing_service.meter_call(session, call)
+    await _close_open_takeover(session, call)
+    await _publish_status(call, EventType.CALL_ENDED, previous=CallStatus.IN_PROGRESS)
     return call
+
+
+async def _publish_status(call: CallLog, event_type: str, *, previous: str | None = None) -> None:
+    """Tell the live dashboards where this call now stands (design doc §4.3)."""
+    await emit(
+        event_type,
+        call.business_id,
+        call_id=call.id,
+        status=call.status,
+        previous_status=previous,
+        direction=call.direction,
+        agent_id=str(call.agent_id) if call.agent_id else None,
+        caller_number=mask_phone(call.caller_number),
+        duration_sec=call.duration_sec,
+        resolution=call.resolution,
+    )
+
+
+async def _close_open_takeover(session: AsyncSession, call: CallLog) -> None:
+    """End any supervisor takeover when the call itself ends.
+
+    Imported here rather than at module scope: ``monitoring`` reaches back into
+    the conversation engine, and importing it eagerly would tangle the call
+    path with the dashboard's.
+    """
+    from app.services import monitoring
+
+    await monitoring.release_for_call_end(session, call)
 
 
 async def soft_delete_call(

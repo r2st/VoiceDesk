@@ -19,10 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 import app.models  # noqa: F401 - registers every table on Base.metadata
+from app.core import events as events_module
 from app.core import redis as redis_module
+from app.core.events import InMemoryEventBus
 from app.core.security import create_access_token, hash_password
 from app.db.base import Base
-from app.db.session import get_db
+from app.db.session import get_db, set_sessionmaker
 from app.main import create_app
 from app.models.business import Business, User
 from app.models.call import CallLog, PhoneNumber
@@ -71,7 +73,38 @@ async def engine():
 async def session(engine) -> AsyncIterator[AsyncSession]:
     maker = async_sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
     async with maker() as s:
-        yield s
+        # Code paths that cannot take a request-scoped session — the monitoring
+        # WebSocket — resolve one through ``get_sessionmaker``. Point that at
+        # this same session so they see the test's uncommitted fixture data
+        # instead of opening a second, empty transaction.
+        set_sessionmaker(_SharedSessionMaker(s))
+        try:
+            yield s
+        finally:
+            set_sessionmaker(None)
+
+
+class _SharedSessionMaker:
+    """Hands every caller the one session the test is already using."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    def __call__(self) -> _SharedSession:
+        return _SharedSession(self._session)
+
+
+class _SharedSession:
+    """``async with`` wrapper that yields the shared session without closing it."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def __aenter__(self) -> AsyncSession:
+        return self._session
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -107,6 +140,15 @@ def fake_whatsapp() -> Iterator[FakeWhatsAppProvider]:
     whatsapp.set_whatsapp_provider(provider)
     yield provider
     whatsapp.set_whatsapp_provider(None)
+
+
+@pytest.fixture(autouse=True)
+def event_bus() -> Iterator[InMemoryEventBus]:
+    """In-process live-event bus. Tests assert against ``.published``."""
+    bus = InMemoryEventBus()
+    events_module.set_event_bus(bus)
+    yield bus
+    events_module.set_event_bus(None)
 
 
 @pytest.fixture(autouse=True)
@@ -201,6 +243,17 @@ async def owner(session: AsyncSession, business: Business) -> User:
 @pytest_asyncio.fixture
 async def viewer(session: AsyncSession, business: Business) -> User:
     return await _make_user(session, business, "viewer@sunrise.test", UserRole.VIEWER)
+
+
+@pytest_asyncio.fixture
+async def supervisor(session: AsyncSession, business: Business) -> User:
+    return await _make_user(session, business, "super@sunrise.test", UserRole.SUPERVISOR)
+
+
+@pytest_asyncio.fixture
+async def second_supervisor(session: AsyncSession, business: Business) -> User:
+    """A colleague — used to prove two people cannot hold the same call."""
+    return await _make_user(session, business, "super2@sunrise.test", UserRole.SUPERVISOR)
 
 
 @pytest_asyncio.fixture
@@ -317,6 +370,11 @@ def owner_headers(owner: User) -> dict[str, str]:
 @pytest.fixture
 def viewer_headers(viewer: User) -> dict[str, str]:
     return auth_headers(viewer)
+
+
+@pytest.fixture
+def supervisor_headers(supervisor: User) -> dict[str, str]:
+    return auth_headers(supervisor)
 
 
 @pytest.fixture

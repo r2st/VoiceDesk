@@ -233,6 +233,52 @@ class WhatsAppHandoff(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin
     error_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
+class CallTakeover(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
+    """A supervisor taking control of a live call from the AI (design doc §4.3).
+
+    Rows are kept after release: who joined which call, when, and how much they
+    said is exactly the audit trail a compliance review asks for. The open row
+    (``ended_at IS NULL``) is the current controller.
+    """
+
+    __tablename__ = "call_takeovers"
+
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    call_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("call_logs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    supervisor_user_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    #: Free text from the supervisor ("caller upset", "AI looping").
+    reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Turns the supervisor spoke while in control.
+    turns_spoken: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: Set when control was handed back to the AI rather than ended with the call.
+    returned_to_ai: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    __table_args__ = (
+        # Two supervisors talking over each other on one call is not a state
+        # the engine can resolve, so the database refuses it outright.
+        Index(
+            "uq_call_takeovers_active_call",
+            "call_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL AND deleted_at IS NULL"),
+            sqlite_where=text("ended_at IS NULL AND deleted_at IS NULL"),
+        ),
+        Index("ix_call_takeovers_business_started", "business_id", "started_at"),
+    )
+
+    @property
+    def is_active(self) -> bool:
+        return self.ended_at is None and self.deleted_at is None
+
+
 class DNDRegistry(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """Local cache of TRAI DND status plus per-business opt-outs."""
 

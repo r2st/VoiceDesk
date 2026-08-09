@@ -7,6 +7,7 @@ from app.models.business import Business, RefreshToken, User
 from app.models.call import (
     CallLog,
     CallRecording,
+    CallTakeover,
     Conversation,
     DNDRegistry,
     PhoneNumber,
@@ -21,6 +22,7 @@ __all__ = [
     "Business",
     "CallLog",
     "CallRecording",
+    "CallTakeover",
     "Conversation",
     "DNDRegistry",
     "DailyAnalytics",

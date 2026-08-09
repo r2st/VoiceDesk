@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import ConflictError, ValidationError
+from app.core.events import EventType, emit
 from app.core.logging import get_logger
 from app.core.timeutil import to_zone
 from app.models.call import CallLog, Conversation
@@ -67,6 +68,9 @@ class TurnResult:
     latency_ms: int = 0
     model_used: str | None = None
     variables: dict[str, Any] = field(default_factory=dict)
+    #: A supervisor holds this call — the caller's turn was recorded but the AI
+    #: deliberately said nothing, and the media edge should wait for the human.
+    awaiting_human: bool = False
 
 
 @dataclass(slots=True)
@@ -249,6 +253,53 @@ class ConversationEngine:
             )
 
         return await self._finalise_turn(session, call, state, result)
+
+    async def record_caller_utterance(
+        self,
+        session: AsyncSession,
+        call: CallLog,
+        agent: VoiceAgent,
+        utterance: str,
+        *,
+        asr_confidence: float = 1.0,
+    ) -> TurnResult:
+        """Transcribe-and-file a caller turn without answering it.
+
+        Used while a supervisor has taken the call over (design doc §4.3): the
+        transcript, language detection and sentiment must keep running so the
+        dashboard stays live and the post-call analytics stay complete, but the
+        AI must not speak over the human who is now handling the call.
+        """
+        started = datetime.now(UTC)
+        state = CallState.from_call(call)
+        allowed = _allowed_languages(agent)
+        language_guess = await nlu.detect_language(utterance, allowed=allowed, client=self._llm)
+        sentiment_guess = await nlu.analyze_sentiment(utterance, client=self._llm)
+
+        await self._persist_turn(
+            session,
+            call,
+            state,
+            role=SpeakerRole.CALLER,
+            content=utterance,
+            language=language_guess.language,
+            confidence=asr_confidence,
+            sentiment=sentiment_guess.sentiment,
+            node_id=state.current_node,
+        )
+        state.save_to(call)
+        await session.flush()
+
+        return TurnResult(
+            reply="",
+            language=language_guess.language,
+            confidence=asr_confidence,
+            node_id=state.current_node,
+            sentiment=sentiment_guess.sentiment,
+            sentiment_score=sentiment_guess.score,
+            awaiting_human=True,
+            latency_ms=_elapsed_ms(started),
+        )
 
     # ------------------------------------------------------------------ #
     # Flow traversal
@@ -681,6 +732,22 @@ class ConversationEngine:
         session.add(turn)
         state.turn_index += 1
         await session.flush()
+
+        # Push to any dashboard watching this call. Best effort by design: a
+        # supervisor's view is never worth failing a live call over.
+        await emit(
+            EventType.TRANSCRIPT_TURN,
+            call.business_id,
+            call_id=call.id,
+            turn_index=turn.turn_index,
+            role=role.value,
+            content=content,
+            language=language.value,
+            confidence=confidence,
+            sentiment=sentiment.value if sentiment else None,
+            detected_intent=intent,
+            latency_ms=latency_ms,
+        )
         return turn
 
     async def _recent_turns(

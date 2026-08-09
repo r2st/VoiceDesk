@@ -117,6 +117,9 @@ class CallTurnResponse(BaseModel):
     transfer_to: str | None = None
     latency_ms: int
     model_used: str | None = None
+    #: A supervisor holds the call; the reply is empty on purpose and the
+    #: media edge should wait for the human rather than speak.
+    awaiting_human: bool = False
 
 
 class HangupRequest(BaseModel):

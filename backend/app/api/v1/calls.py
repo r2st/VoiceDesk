@@ -24,7 +24,7 @@ from app.schemas.call import (
     InitiateCallRequest,
 )
 from app.schemas.common import Page
-from app.services import call_service
+from app.services import call_service, monitoring
 from app.services.conversation_engine import get_engine
 
 router = APIRouter(prefix="/calls", tags=["calls"])
@@ -122,6 +122,11 @@ async def process_turn(
 
     This is the seam the media pipeline drives: ASR posts here, and the reply
     is what TTS speaks back to the caller.
+
+    While a supervisor holds the call (design doc §4.3) the utterance is still
+    transcribed and filed, but the AI stays silent: the response comes back with
+    ``awaiting_human`` set and an empty reply, and the media edge waits for the
+    supervisor to speak rather than talking over them.
     """
     call = await call_service.get_call(session, context.business_id, call_id)
     if call.status in {s.value for s in CallStatus.terminal()}:
@@ -132,9 +137,15 @@ async def process_turn(
     agent = await get_owned_or_404(
         session, VoiceAgent, call.agent_id, context.business_id, label="Agent"
     )
-    result = await get_engine().process_turn(
-        session, call, agent, payload.utterance, asr_confidence=payload.asr_confidence
-    )
+    engine = get_engine()
+    if await monitoring.active_takeover(session, context.business_id, call_id) is not None:
+        result = await engine.record_caller_utterance(
+            session, call, agent, payload.utterance, asr_confidence=payload.asr_confidence
+        )
+    else:
+        result = await engine.process_turn(
+            session, call, agent, payload.utterance, asr_confidence=payload.asr_confidence
+        )
     return CallTurnResponse(
         reply=result.reply,
         language=result.language,
@@ -149,6 +160,7 @@ async def process_turn(
         transfer_to=result.transfer_to,
         latency_ms=result.latency_ms,
         model_used=result.model_used,
+        awaiting_human=result.awaiting_human,
     )
 
 
@@ -178,6 +190,7 @@ async def start_call(
         transfer_to=result.transfer_to,
         latency_ms=result.latency_ms,
         model_used=result.model_used,
+        awaiting_human=result.awaiting_human,
     )
 
 

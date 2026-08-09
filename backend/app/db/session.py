@@ -31,6 +31,18 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
     return _sessionmaker
 
 
+def set_sessionmaker(maker) -> None:
+    """Override the shared factory.
+
+    WebSocket routes cannot use the request-scoped ``get_db`` dependency — the
+    connection outlives any single transaction — so they open sessions through
+    :func:`get_sessionmaker` directly. This is the seam that lets tests point
+    that path at the in-memory database.
+    """
+    global _sessionmaker
+    _sessionmaker = maker
+
+
 async def get_db() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency yielding a transactional session."""
     async with get_sessionmaker()() as session:
