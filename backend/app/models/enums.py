@@ -132,6 +132,30 @@ class IntentActionType(StrEnum):
     NONE = "none"
 
 
+class AppointmentStatus(StrEnum):
+    SCHEDULED = "scheduled"
+    CONFIRMED = "confirmed"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    NO_SHOW = "no_show"
+
+    @classmethod
+    def active(cls) -> set[AppointmentStatus]:
+        """Statuses that still occupy a slot in the calendar."""
+        return {cls.SCHEDULED, cls.CONFIRMED}
+
+    @classmethod
+    def terminal(cls) -> set[AppointmentStatus]:
+        return {cls.COMPLETED, cls.CANCELLED, cls.NO_SHOW}
+
+
+class AppointmentSource(StrEnum):
+    VOICE_CALL = "voice_call"
+    DASHBOARD = "dashboard"
+    WHATSAPP = "whatsapp"
+    API = "api"
+
+
 class HandoffReason(StrEnum):
     LOW_CONFIDENCE = "low_confidence"
     CALLER_REQUEST = "caller_request"

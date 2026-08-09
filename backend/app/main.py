@@ -81,6 +81,7 @@ def _register_routers(app: FastAPI) -> None:
     from app.api.v1 import (
         agents,
         analytics,
+        appointments,
         billing,
         calls,
         intents,
@@ -96,6 +97,7 @@ def _register_routers(app: FastAPI) -> None:
         agents,
         intents,
         phone_numbers,
+        appointments,
         calls,
         recordings,
         whatsapp,

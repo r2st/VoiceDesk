@@ -2,6 +2,7 @@
 
 from app.db.base import Base
 from app.models.analytics import BillingUsage, DailyAnalytics
+from app.models.appointment import Appointment
 from app.models.business import Business, RefreshToken, User
 from app.models.call import (
     CallLog,
@@ -14,6 +15,7 @@ from app.models.call import (
 from app.models.voice_agent import Intent, VoiceAgent
 
 __all__ = [
+    "Appointment",
     "Base",
     "BillingUsage",
     "Business",
