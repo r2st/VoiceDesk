@@ -1042,7 +1042,7 @@ def _render_string(template: str, variables: dict) -> str:
     return rendered
 
 
-def _render_template(template: dict, variables: dict) -> dict:
+def _render_template(template: dict | None, variables: dict) -> dict:
     return {
         key: _render_string(value, variables) if isinstance(value, str) else value
         for key, value in (template or {}).items()
