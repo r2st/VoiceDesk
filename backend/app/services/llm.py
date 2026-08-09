@@ -64,7 +64,10 @@ class OpenRouterClient:
     ) -> None:
         self.api_key = api_key if api_key is not None else settings.openrouter_api_key
         self.base_url = (base_url or settings.openrouter_base_url).rstrip("/")
-        self.models = list(models or settings.openrouter_models)
+        # `is None`, not `or`: an explicitly empty chain means "no models", and
+        # must surface as the configuration error below rather than silently
+        # reverting to whatever the global settings happen to hold.
+        self.models = list(models if models is not None else settings.openrouter_models)
         self.timeout = timeout or settings.openrouter_timeout_seconds
         self._client = client
 
@@ -93,7 +96,7 @@ class OpenRouterClient:
             )
 
         payload_messages = [m.to_dict() if isinstance(m, LLMMessage) else m for m in messages]
-        chain = models or self.models
+        chain = models if models is not None else self.models
         if not chain:
             raise ExternalServiceError("No OpenRouter models are configured.")
 
@@ -139,7 +142,19 @@ class OpenRouterClient:
                     logger.warning("OpenRouter rejected request on %s: %s", model, last_error)
                     continue
 
-                parsed = self._parse(response.json(), model, latency_ms)
+                # Free models are loose about their own output: a gateway can
+                # answer 200 with an HTML page, `choices` can hold bare strings
+                # instead of objects, and token counts are not always numbers.
+                # Any of those raised out of the loop and abandoned the whole
+                # chain, so one flaky model took down the healthy ones behind
+                # it — exactly what the chain exists to prevent.
+                try:
+                    parsed = self._parse(response.json(), model, latency_ms)
+                except (ValueError, AttributeError, TypeError) as exc:
+                    last_error = f"{model}: unreadable response ({exc})"
+                    logger.warning("OpenRouter returned an unreadable body on %s: %s", model, exc)
+                    continue
+
                 if parsed is None:
                     last_error = f"{model}: empty completion"
                     continue
