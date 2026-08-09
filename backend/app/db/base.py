@@ -8,6 +8,8 @@ from datetime import datetime
 from sqlalchemy import DateTime, MetaData, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from app.db.types import GUID
+
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",
@@ -32,7 +34,12 @@ def new_uuid() -> uuid.UUID:
 
 
 class UUIDPrimaryKeyMixin:
-    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_uuid)
+    #: ``GUID`` is spelled out rather than left to the annotation map. Every
+    #: foreign key already uses it, and SQLAlchemy's own ``Uuid`` type renders
+    #: as un-hyphenated ``CHAR(32)`` on SQLite while ``GUID`` renders as
+    #: hyphenated ``CHAR(36)`` — a mismatch that makes every primary-to-foreign
+    #: key join return nothing outside PostgreSQL.
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=new_uuid)
 
 
 class TimestampMixin:

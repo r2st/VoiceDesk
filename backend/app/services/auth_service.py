@@ -22,6 +22,7 @@ from app.core.security import (
     verify_password,
 )
 from app.core.tenancy import tenant_select
+from app.core.timeutil import ensure_utc
 from app.models.business import Business, RefreshToken, User
 from app.models.enums import BusinessStatus, UserRole
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenPair, UserCreate, UserUpdate
@@ -169,7 +170,7 @@ async def refresh_tokens(
         # Re-use of an already-rotated token: revoke the whole family.
         await revoke_all_for_user(session, record.user_id)
         raise AuthenticationError("Refresh token has already been used.")
-    if record.expires_at <= datetime.now(UTC):
+    if ensure_utc(record.expires_at) <= datetime.now(UTC):
         raise AuthenticationError("Refresh token has expired.")
 
     user = await session.get(User, uuid.UUID(payload["sub"]))
@@ -188,6 +189,7 @@ async def revoke_refresh_token(session: AsyncSession, refresh_token: str) -> Non
     ).scalar_one_or_none()
     if record is not None and record.revoked_at is None:
         record.revoked_at = datetime.now(UTC)
+        await session.flush()
 
 
 async def revoke_all_for_user(session: AsyncSession, user_id: uuid.UUID) -> int:
@@ -205,6 +207,7 @@ async def revoke_all_for_user(session: AsyncSession, user_id: uuid.UUID) -> int:
     now = datetime.now(UTC)
     for record in records:
         record.revoked_at = now
+    await session.flush()
     return len(records)
 
 
@@ -264,6 +267,10 @@ async def soft_delete_user(
         await _guard_last_owner(session, business_id, user.id)
     user.deleted_at = datetime.now(UTC)
     user.is_active = False
+    # Flushed before the revoke sweep so that a subsequent read in the same
+    # transaction — re-inviting the address, or counting the remaining owners
+    # — sees the row as gone rather than still active.
+    await session.flush()
     await revoke_all_for_user(session, user.id)
 
 
