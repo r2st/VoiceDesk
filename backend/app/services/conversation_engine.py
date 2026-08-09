@@ -38,7 +38,7 @@ from app.models.enums import (
 )
 from app.models.voice_agent import VoiceAgent
 from app.schemas.appointment import AppointmentCreate
-from app.services import compliance, nlu
+from app.services import compliance, nlu, whatsapp
 from app.services.flow import ConversationFlow, NodeType, validate_flow
 from app.services.llm import LLMMessage, OpenRouterClient, get_llm_client
 
@@ -239,20 +239,19 @@ class ConversationEngine:
         result.detected_intent = result.detected_intent or intent_guess.intent
         result.latency_ms = _elapsed_ms(started)
 
-        # Confidence-triggered WhatsApp handoff (design doc §4.5).
-        threshold = agent.handoff_confidence_threshold or 0.70
-        if (
-            agent.whatsapp_handoff_enabled
-            and not result.should_handoff
-            and result.confidence < threshold
-        ):
-            result.should_handoff = True
-            result.handoff_reason = HandoffReason.LOW_CONFIDENCE
-            result.reply = _localised(
-                language_guess.language,
-                "मैं इसे ठीक से समझ नहीं पाया। मैं आपको WhatsApp पर विवरण भेज रहा हूँ।",
-                "I could not quite follow that. I am sending you the details on WhatsApp.",
+        # WhatsApp handoff (design doc §4.5). All three triggers — low
+        # confidence, the caller asking for text, and a document being needed —
+        # are decided by `whatsapp.should_handoff`, so the live call path and
+        # the handoff service cannot drift apart. A flow HANDOFF node has
+        # already set its own reason, so it is left alone.
+        if not result.should_handoff:
+            reason = whatsapp.should_handoff(
+                confidence=result.confidence, agent=agent, utterance=utterance
             )
+            if reason is not None:
+                result.should_handoff = True
+                result.handoff_reason = reason
+                result.reply = _handoff_reply(reason, language_guess.language)
 
         return await self._finalise_turn(session, call, state, result)
 
@@ -945,6 +944,31 @@ def _system_prompt(agent: VoiceAgent, language: Language, state: CallState) -> s
 
 def _localised(language: Language, hindi: str, english: str) -> str:
     return hindi if language is Language.HINDI else english
+
+
+def _handoff_reply(reason: HandoffReason, language: Language) -> str:
+    """What the agent says out loud as it moves the caller to WhatsApp.
+
+    The wording has to match why we are leaving: apologising for not following
+    a caller who simply asked to be texted reads as a malfunction.
+    """
+    if reason is HandoffReason.CALLER_REQUEST:
+        return _localised(
+            language,
+            "ज़रूर! मैं आपको WhatsApp पर विवरण भेज रहा हूँ।",
+            "Of course. I am sending you the details on WhatsApp.",
+        )
+    if reason is HandoffReason.DOCUMENT_REQUIRED:
+        return _localised(
+            language,
+            "आप दस्तावेज़ WhatsApp पर भेज सकते हैं। मैं आपको अभी मैसेज भेज रहा हूँ।",
+            "You can share the document with us on WhatsApp. I am messaging you now.",
+        )
+    return _localised(
+        language,
+        "मैं इसे ठीक से समझ नहीं पाया। मैं आपको WhatsApp पर विवरण भेज रहा हूँ।",
+        "I could not quite follow that. I am sending you the details on WhatsApp.",
+    )
 
 
 def _customer_number(call: CallLog) -> str:

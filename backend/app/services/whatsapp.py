@@ -26,6 +26,9 @@ from app.models.voice_agent import VoiceAgent
 
 logger = get_logger(__name__)
 
+#: Used when an agent has no threshold of its own. Matches the column default.
+DEFAULT_HANDOFF_THRESHOLD = 0.70
+
 HANDOFF_TEMPLATES = {
     "hi": (
         "नमस्ते! अभी हमारी फ़ोन पर बात हुई थी। यहाँ आपकी बातचीत का सारांश है:\n\n"
@@ -291,7 +294,11 @@ def should_handoff(
         for phrase in ("send document", "share document", "upload", "photo", "receipt", "invoice")
     ):
         return HandoffReason.DOCUMENT_REQUIRED
-    if confidence < (agent.handoff_confidence_threshold or 0.70):
+    # `is None`, not `or`: the API accepts a threshold of 0.0, which means
+    # "never escalate on confidence alone". `or` would read that as unset and
+    # substitute 0.70, escalating on exactly the calls the tenant excluded.
+    threshold = agent.handoff_confidence_threshold
+    if confidence < (DEFAULT_HANDOFF_THRESHOLD if threshold is None else threshold):
         return HandoffReason.LOW_CONFIDENCE
     return None
 
