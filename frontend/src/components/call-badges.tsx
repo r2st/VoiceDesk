@@ -1,0 +1,59 @@
+"use client";
+
+import { Badge, type BadgeTone } from "@/components/ui";
+import { titleCase } from "@/lib/format";
+import type { CallResolution, CallStatus, Sentiment } from "@/lib/types";
+
+const STATUS_TONE: Record<CallStatus, BadgeTone> = {
+  queued: "neutral",
+  ringing: "info",
+  in_progress: "info",
+  completed: "success",
+  no_answer: "warning",
+  busy: "warning",
+  failed: "danger",
+  cancelled: "neutral",
+  blocked_dnd: "danger",
+  blocked_calling_hours: "danger",
+};
+
+const RESOLUTION_TONE: Record<CallResolution, BadgeTone> = {
+  resolved: "success",
+  unresolved: "warning",
+  escalated: "danger",
+  handed_off: "info",
+  pending: "neutral",
+};
+
+const SENTIMENT_TONE: Record<Sentiment, BadgeTone> = {
+  positive: "success",
+  neutral: "neutral",
+  negative: "danger",
+};
+
+/** `blocked_calling_hours` is too long for a table cell at its full width. */
+const STATUS_LABEL: Partial<Record<CallStatus, string>> = {
+  blocked_calling_hours: "Outside hours",
+  blocked_dnd: "DND blocked",
+};
+
+export function StatusBadge({ status }: { status: CallStatus }) {
+  return (
+    <Badge tone={STATUS_TONE[status] ?? "neutral"}>
+      {STATUS_LABEL[status] ?? titleCase(status)}
+    </Badge>
+  );
+}
+
+export function ResolutionBadge({ resolution }: { resolution: CallResolution }) {
+  return (
+    <Badge tone={RESOLUTION_TONE[resolution] ?? "neutral"}>
+      {titleCase(resolution)}
+    </Badge>
+  );
+}
+
+export function SentimentBadge({ sentiment }: { sentiment: Sentiment | null }) {
+  if (!sentiment) return <span className="text-ink-400">—</span>;
+  return <Badge tone={SENTIMENT_TONE[sentiment]}>{titleCase(sentiment)}</Badge>;
+}
