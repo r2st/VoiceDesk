@@ -19,7 +19,8 @@ from app.models.enums import (
     TelephonyProvider,
 )
 from app.schemas.call import InitiateCallRequest
-from app.services import call_service, compliance
+from app.services import call_service, compliance, recording_service
+from app.services.conversation_engine import get_engine
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -406,3 +407,90 @@ class TestCallEndpoints:
     async def test_summarise_without_a_transcript_is_404(self, client, owner_headers, call):
         response = await client.post(f"/api/v1/calls/{call.id}/summarise", headers=owner_headers)
         assert response.status_code == 404
+
+    async def test_list_calls_via_http(self, client, owner_headers, call):
+        response = await client.get("/api/v1/calls", headers=owner_headers)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert body["items"][0]["id"] == str(call.id)
+
+    async def test_get_call_reports_a_stored_recording(
+        self, client, session, owner_headers, call
+    ):
+        await recording_service.store_recording(session, call, b"fake-audio-bytes")
+
+        response = await client.get(f"/api/v1/calls/{call.id}", headers=owner_headers)
+        assert response.status_code == 200
+        assert response.json()["has_recording"] is True
+
+    async def test_get_call_without_transcript_skips_the_engine(
+        self, client, owner_headers, call
+    ):
+        response = await client.get(
+            f"/api/v1/calls/{call.id}",
+            headers=owner_headers,
+            params={"include_transcript": "false"},
+        )
+        body = response.json()
+        assert response.status_code == 200
+        assert body["conversations"] == []
+        assert body["sentiment_trajectory"] is None
+
+    async def test_transcript_endpoint(self, session, client, owner_headers, call, agent):
+        await get_engine().process_turn(session, call, agent, "Namaste")
+
+        response = await client.get(f"/api/v1/calls/{call.id}/transcript", headers=owner_headers)
+        assert response.status_code == 200
+        turns = response.json()
+        assert len(turns) >= 1
+        assert turns[0]["role"] == "caller"
+
+    async def test_turn_via_http_returns_the_agent_reply(self, client, owner_headers, call):
+        response = await client.post(
+            f"/api/v1/calls/{call.id}/turn",
+            headers=owner_headers,
+            json={"utterance": "Namaste"},
+        )
+        assert response.status_code == 200
+        assert response.json()["awaiting_human"] is False
+
+    async def test_turn_requires_an_assigned_agent(self, client, session, owner_headers, call):
+        call.agent_id = None
+        await session.flush()
+
+        response = await client.post(
+            f"/api/v1/calls/{call.id}/turn",
+            headers=owner_headers,
+            json={"utterance": "Namaste"},
+        )
+        assert response.status_code == 409
+
+    async def test_greeting_via_http(self, client, owner_headers, call):
+        response = await client.post(f"/api/v1/calls/{call.id}/greeting", headers=owner_headers)
+        assert response.status_code == 200
+        assert response.json()["reply"] != ""
+
+    async def test_greeting_requires_an_assigned_agent(self, client, session, owner_headers, call):
+        call.agent_id = None
+        await session.flush()
+
+        response = await client.post(f"/api/v1/calls/{call.id}/greeting", headers=owner_headers)
+        assert response.status_code == 409
+
+    async def test_summarise_via_http(self, session, client, owner_headers, call, agent):
+        await get_engine().process_turn(session, call, agent, "Namaste")
+
+        response = await client.post(f"/api/v1/calls/{call.id}/summarise", headers=owner_headers)
+        assert response.status_code == 200
+        assert response.json()["summary"]
+
+    async def test_delete_call_via_http(self, client, session, owner_headers, call):
+        call.status = CallStatus.COMPLETED
+        await session.flush()
+
+        response = await client.delete(f"/api/v1/calls/{call.id}", headers=owner_headers)
+        assert response.status_code == 204
+
+        follow_up = await client.get(f"/api/v1/calls/{call.id}", headers=owner_headers)
+        assert follow_up.status_code == 404

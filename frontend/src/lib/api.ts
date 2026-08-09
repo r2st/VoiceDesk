@@ -152,10 +152,11 @@ async function refreshSession(): Promise<boolean> {
   return true;
 }
 
-export async function request<T>(
+/** The auth pipeline (bearer header, one refresh-and-retry) without a JSON parse. */
+async function rawRequest(
   path: string,
   options: RequestOptions = {},
-): Promise<T> {
+): Promise<Response> {
   const { method = "GET", body, query, retryOnUnauthorized = true } = options;
 
   const headers: Record<string, string> = {};
@@ -171,10 +172,17 @@ export async function request<T>(
 
   if (response.status === 401 && retryOnUnauthorized && tokens.refresh()) {
     if (await refreshSession()) {
-      return request<T>(path, { ...options, retryOnUnauthorized: false });
+      return rawRequest(path, { ...options, retryOnUnauthorized: false });
     }
   }
+  return response;
+}
 
+export async function request<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
+  const response = await rawRequest(path, options);
   if (!response.ok) throw await toApiError(response);
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -360,5 +368,15 @@ export const api = {
     quota: () => request<QuotaStatus>("/billing/quota"),
     history: () => request<Usage[]>("/billing/history"),
     plans: () => request<Plan[]>("/billing/plans"),
+  },
+
+  recordings: {
+    /** Decrypted audio for a call. The API streams it; a presigned S3 URL
+     * would only yield ciphertext (recordings are encrypted at rest). */
+    stream: async (callId: string): Promise<Blob> => {
+      const response = await rawRequest(`/recordings/${callId}/stream`);
+      if (!response.ok) throw await toApiError(response);
+      return response.blob();
+    },
   },
 };

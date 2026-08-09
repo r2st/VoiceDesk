@@ -1,9 +1,11 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
+
 import Link from "next/link";
 import { useParams } from "next/navigation";
 
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
 import {
   dateTime,
@@ -108,6 +110,15 @@ export default function CallDetailPage() {
         </Card>
       ) : null}
 
+      {data.has_recording ? (
+        <Card className="mt-4">
+          <CardHeader title="Recording" subtitle="Decrypted on request, never cached" />
+          <div className="px-5 py-4">
+            <RecordingPlayer callId={callId} />
+          </div>
+        </Card>
+      ) : null}
+
       <Card className="mt-4">
         <CardHeader
           title="Transcript"
@@ -160,6 +171,65 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between gap-4 border-b border-ink-50 pb-2">
       <dt className="text-ink-500">{label}</dt>
       <dd className="text-ink-900">{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * The audio is fetched lazily, on request, rather than on page load: it is
+ * decrypted server-side on every call and there is no reason to pay that cost
+ * for a call the reviewer never plays.
+ */
+function RecordingPlayer({ callId }: { callId: string }) {
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle",
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const objectUrlRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    };
+  }, []);
+
+  async function load() {
+    setStatus("loading");
+    setError(null);
+    try {
+      const blob = await api.recordings.stream(callId);
+      const url = URL.createObjectURL(blob);
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+      objectUrlRef.current = url;
+      setAudioUrl(url);
+      setStatus("ready");
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "Could not load the recording.",
+      );
+      setStatus("error");
+    }
+  }
+
+  if (status === "ready" && audioUrl) {
+    // eslint-disable-next-line jsx-a11y/media-has-caption
+    return <audio className="w-full" controls autoPlay src={audioUrl} />;
+  }
+
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        onClick={load}
+        disabled={status === "loading"}
+        className="rounded-md border border-ink-200 bg-white px-3 py-1.5 text-sm font-medium text-ink-700 hover:bg-ink-50 disabled:opacity-60"
+      >
+        {status === "loading" ? "Decrypting…" : "Play recording"}
+      </button>
+      {error ? <span className="text-sm text-rose-700">{error}</span> : null}
     </div>
   );
 }

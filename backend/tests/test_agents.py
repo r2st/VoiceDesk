@@ -276,6 +276,46 @@ class TestIntents:
         assert await agent_service.list_intents(session, business.id) == []
 
 
+class TestIntentEndpoints:
+    async def test_create_via_http(self, client, owner_headers):
+        response = await client.post(
+            "/api/v1/intents",
+            headers=owner_headers,
+            json={"name": "check_status", "description": "Caller wants an update"},
+        )
+        assert response.status_code == 201
+        assert response.json()["name"] == "check_status"
+
+    async def test_list_via_http(self, client, owner_headers, session, business):
+        await agent_service.create_intent(session, business.id, IntentCreate(name="live_one"))
+
+        response = await client.get("/api/v1/intents", headers=owner_headers)
+        assert response.status_code == 200
+        assert [i["name"] for i in response.json()] == ["live_one"]
+
+    async def test_update_via_http(self, client, owner_headers, session, business):
+        intent = await agent_service.create_intent(session, business.id, IntentCreate(name="check_status"))
+
+        response = await client.patch(
+            f"/api/v1/intents/{intent.id}", headers=owner_headers, json={"priority": 7}
+        )
+        assert response.status_code == 200
+        assert response.json()["priority"] == 7
+
+    async def test_delete_via_http(self, client, owner_headers, session, business):
+        intent = await agent_service.create_intent(session, business.id, IntentCreate(name="check_status"))
+
+        response = await client.delete(f"/api/v1/intents/{intent.id}", headers=owner_headers)
+        assert response.status_code == 204
+        assert await agent_service.list_intents(session, business.id) == []
+
+    async def test_viewer_cannot_create_an_intent(self, client, viewer_headers):
+        response = await client.post(
+            "/api/v1/intents", headers=viewer_headers, json={"name": "check_status"}
+        )
+        assert response.status_code == 403
+
+
 class TestAgentEndpoints:
     async def test_create_via_http(self, client, owner_headers):
         response = await client.post(
