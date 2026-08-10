@@ -5,12 +5,26 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 #: List fields readable from the environment as comma-separated strings.
 #: ``NoDecode`` stops pydantic-settings from JSON-parsing them before validation.
 CSVList = Annotated[list[str], NoDecode]
+
+#: Placeholder values that ship in ``.env.example``. Convenient in development,
+#: catastrophic in production — a known JWT secret lets anyone mint a valid
+#: token for any tenant, so booting with one is treated as a fatal misconfiguration.
+DEFAULT_JWT_SECRET = "change-me-in-production"
+DEFAULT_WEBHOOK_SECRET = "change-me-webhook-secret"
+
+#: Shortest JWT secret accepted in production. HS256 keys below this are
+#: brute-forceable offline from a single captured token.
+MIN_SECRET_LENGTH = 32
+
+
+class InsecureConfigurationError(RuntimeError):
+    """Raised at startup when production is configured with unsafe defaults."""
 
 
 class Settings(BaseSettings):
@@ -108,6 +122,47 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.voicedesk_env.lower() in {"production", "prod"}
+
+    @model_validator(mode="after")
+    def _reject_insecure_production(self) -> Settings:
+        """Refuse to start a production process holding development secrets.
+
+        These are checked here rather than in a deployment script because the
+        failure mode is silent: the API comes up, serves traffic and looks
+        healthy while signing tokens with a secret published in the repository.
+        Crashing on boot turns that into an obvious, immediate deploy failure.
+        """
+        if not self.is_production:
+            return self
+
+        problems: list[str] = []
+
+        if self.jwt_secret == DEFAULT_JWT_SECRET:
+            problems.append("JWT_SECRET is still the example placeholder")
+        elif len(self.jwt_secret) < MIN_SECRET_LENGTH:
+            problems.append(
+                f"JWT_SECRET must be at least {MIN_SECRET_LENGTH} characters "
+                f"(got {len(self.jwt_secret)})"
+            )
+
+        if not self.webhook_hmac_secret or self.webhook_hmac_secret == DEFAULT_WEBHOOK_SECRET:
+            problems.append("WEBHOOK_HMAC_SECRET is unset or still the example placeholder")
+
+        if not self.recording_encryption_key:
+            problems.append("RECORDING_ENCRYPTION_KEY must be set")
+
+        if "*" in self.cors_origins:
+            problems.append(
+                "CORS_ORIGINS may not contain '*' — credentialed requests would be "
+                "accepted from any origin"
+            )
+
+        if problems:
+            raise InsecureConfigurationError(
+                "Refusing to start in production with an insecure configuration:\n"
+                + "\n".join(f"  - {problem}" for problem in problems)
+            )
+        return self
 
 
 @lru_cache

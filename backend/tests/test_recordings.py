@@ -242,3 +242,94 @@ class TestRecordingEndpoints:
 
         response = await client.get("/api/v1/recordings", headers=owner_headers)
         assert len(response.json()["items"]) == 1
+
+
+class TestRecordingPagination:
+    """``total`` must be the tenant's real count, not the size of the page.
+
+    It was previously ``len(page) + offset``, which reports a full last page as
+    the end of the list and makes the dashboard's "page 2" button vanish while
+    more recordings exist.
+    """
+
+    async def _seed(self, session, business, count: int) -> None:
+        for index in range(count):
+            session.add(
+                CallRecording(
+                    business_id=business.id,
+                    call_id=uuid.uuid4(),
+                    storage_path=f"recordings/{business.id}/{index}.opus.enc",
+                    storage_bucket="test",
+                )
+            )
+        await session.flush()
+
+    async def test_total_counts_every_row_not_just_the_page(
+        self, client, session, business, owner_headers
+    ):
+        await self._seed(session, business, 7)
+
+        body = (
+            await client.get("/api/v1/recordings?limit=3", headers=owner_headers)
+        ).json()
+        assert len(body["items"]) == 3
+        assert body["total"] == 7
+
+    async def test_total_is_stable_across_pages(
+        self, client, session, business, owner_headers
+    ):
+        await self._seed(session, business, 7)
+
+        for offset in (0, 3, 6):
+            body = (
+                await client.get(
+                    f"/api/v1/recordings?limit=3&offset={offset}", headers=owner_headers
+                )
+            ).json()
+            assert body["total"] == 7
+
+    async def test_a_full_final_page_does_not_understate_the_total(
+        self, client, session, business, owner_headers
+    ):
+        """The exact case the old arithmetic got wrong: page size divides the total."""
+        await self._seed(session, business, 6)
+
+        body = (
+            await client.get("/api/v1/recordings?limit=3&offset=3", headers=owner_headers)
+        ).json()
+        assert len(body["items"]) == 3
+        assert body["total"] == 6
+
+    async def test_total_ignores_other_tenants(
+        self, client, session, business, other_business, owner_headers
+    ):
+        await self._seed(session, business, 2)
+        await self._seed(session, other_business, 5)
+
+        body = (await client.get("/api/v1/recordings", headers=owner_headers)).json()
+        assert body["total"] == 2
+
+    async def test_an_empty_tenant_reports_zero(self, client, owner_headers):
+        body = (await client.get("/api/v1/recordings", headers=owner_headers)).json()
+        assert body["items"] == []
+        assert body["total"] == 0
+
+    async def test_an_offset_past_the_end_still_reports_the_true_total(
+        self, client, session, business, owner_headers
+    ):
+        await self._seed(session, business, 2)
+
+        body = (
+            await client.get("/api/v1/recordings?limit=10&offset=50", headers=owner_headers)
+        ).json()
+        assert body["items"] == []
+        assert body["total"] == 2
+
+    async def test_the_service_returns_the_page_and_the_count(
+        self, session, business
+    ):
+        await self._seed(session, business, 4)
+
+        page, total = await recording_service.list_recordings(session, business.id, limit=2)
+        assert len(page) == 2
+        assert total == 4

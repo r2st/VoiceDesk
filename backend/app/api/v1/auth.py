@@ -47,7 +47,10 @@ async def register(
 @router.post("/login", response_model=TokenPair)
 async def login(payload: LoginRequest, request: Request, session: DbSession) -> TokenPair:
     _, tokens = await auth_service.authenticate(
-        session, payload, user_agent=request.headers.get("user-agent")
+        session,
+        payload,
+        user_agent=request.headers.get("user-agent"),
+        client_ip=request.client.host if request.client else None,
     )
     return tokens
 

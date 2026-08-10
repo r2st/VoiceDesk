@@ -23,12 +23,12 @@ async def list_recordings(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> Page[RecordingOut]:
-    recordings = await recording_service.list_recordings(
+    recordings, total = await recording_service.list_recordings(
         session, context.business_id, limit=limit, offset=offset
     )
     return Page[RecordingOut](
         items=[RecordingOut.model_validate(r) for r in recordings],
-        total=len(recordings) + offset,
+        total=total,
         limit=limit,
         offset=offset,
     )

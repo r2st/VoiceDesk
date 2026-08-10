@@ -31,13 +31,19 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    # The schema names every endpoint, its roles and its request shape. That is
+    # a useful map for an attacker and of no use to the dashboard, which is the
+    # only client, so production serves neither the schema nor the docs UI.
+    expose_docs = not settings.is_production
+
     app = FastAPI(
         title="VoiceDesk API",
         description="AI Voice Agent Platform for Indian Businesses",
         version="0.1.0",
         lifespan=lifespan,
-        docs_url="/docs",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if expose_docs else None,
+        redoc_url="/redoc" if expose_docs else None,
+        openapi_url="/openapi.json" if expose_docs else None,
     )
 
     app.add_middleware(

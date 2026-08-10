@@ -6,7 +6,7 @@ import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -179,14 +179,14 @@ async def load_audio(
 
 async def list_recordings(
     session: AsyncSession, business_id: uuid.UUID, *, limit: int = 50, offset: int = 0
-) -> list[CallRecording]:
+) -> tuple[list[CallRecording], int]:
+    """One page of recordings plus the tenant's full count, for pagination."""
+    stmt = tenant_select(CallRecording, business_id)
+    total = await session.scalar(select(func.count()).select_from(stmt.order_by(None).subquery()))
     result = await session.execute(
-        tenant_select(CallRecording, business_id)
-        .order_by(CallRecording.created_at.desc())
-        .limit(limit)
-        .offset(offset)
+        stmt.order_by(CallRecording.created_at.desc()).limit(limit).offset(offset)
     )
-    return list(result.scalars().all())
+    return list(result.scalars().all()), int(total or 0)
 
 
 async def purge_recording(

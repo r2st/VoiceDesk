@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import throttle
 from app.core.config import settings
 from app.core.errors import AuthenticationError, ConflictError, NotFoundError, ValidationError
 from app.core.logging import get_logger
@@ -122,8 +123,16 @@ async def register_business(
 
 
 async def authenticate(
-    session: AsyncSession, payload: LoginRequest, *, user_agent: str | None = None
+    session: AsyncSession,
+    payload: LoginRequest,
+    *,
+    user_agent: str | None = None,
+    client_ip: str | None = None,
 ) -> tuple[User, TokenPair]:
+    # Checked before the database is touched so a locked-out attacker cannot
+    # keep driving password hashing, which is deliberately expensive.
+    await throttle.enforce(payload.email, client_ip)
+
     stmt = select(User).where(
         func.lower(User.email) == payload.email.lower(), User.deleted_at.is_(None)
     )
@@ -139,6 +148,10 @@ async def authenticate(
     if user is None:
         if not candidates:
             verify_password(payload.password, hash_password("dummy-password-for-timing"))
+        # Only credential failures are counted. The checks below happen after
+        # the password has matched, so an attacker reaching them already has it
+        # and throttling there would only lock out the legitimate owner.
+        await throttle.record_failure(payload.email, client_ip)
         raise AuthenticationError("Invalid email or password.")
     if not user.is_active:
         raise AuthenticationError("This account has been deactivated.")
@@ -150,6 +163,9 @@ async def authenticate(
         raise AuthenticationError("This business account has been cancelled.")
 
     user.last_login_at = datetime.now(UTC)
+    # A few mistyped passwords followed by the right one must not leave the
+    # account counting down a lockout it no longer deserves.
+    await throttle.clear(payload.email)
     tokens = await issue_token_pair(session, user, user_agent=user_agent)
     return user, tokens
 

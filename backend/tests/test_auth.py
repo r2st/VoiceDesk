@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AuthenticationError, ConflictError, NotFoundError, ValidationError
 from app.core.security import create_access_token, create_refresh_token, hash_password, hash_token
+from app.core.throttle import MAX_ATTEMPTS_PER_ACCOUNT, WINDOW_SECONDS, LoginThrottleError
 from app.models.business import Business, RefreshToken, User
 from app.models.enums import BusinessStatus, PlanTier, UserRole
 from app.schemas.auth import LoginRequest, RegisterRequest, UserCreate, UserUpdate
@@ -336,6 +337,146 @@ class TestLogin:
             "/api/v1/auth/login", json={"email": account.email, "password": "wrong-one"}
         )
         assert response.status_code == 401
+
+
+# --------------------------------------------------------------------------- #
+# Brute-force throttling
+# --------------------------------------------------------------------------- #
+class TestLoginThrottling:
+    """``test_throttle`` covers the counters; this covers the wiring into login.
+
+    What matters here is that the budget is spent by *failures only*, that a
+    correct password both succeeds and resets the count, and that a locked
+    account stays locked even when the right password finally arrives.
+    """
+
+    async def test_repeated_failures_eventually_lock_the_account(
+        self, session: AsyncSession, account: User
+    ):
+        for _ in range(MAX_ATTEMPTS_PER_ACCOUNT):
+            with pytest.raises(AuthenticationError):
+                await auth_service.authenticate(
+                    session, LoginRequest(email=account.email, password="wrong-one")
+                )
+
+        with pytest.raises(LoginThrottleError):
+            await auth_service.authenticate(
+                session, LoginRequest(email=account.email, password="wrong-one")
+            )
+
+    async def test_the_correct_password_is_refused_once_locked(
+        self, session: AsyncSession, account: User
+    ):
+        """The lockout is the whole point — it must outrank a valid credential."""
+        for _ in range(MAX_ATTEMPTS_PER_ACCOUNT):
+            with pytest.raises(AuthenticationError):
+                await auth_service.authenticate(
+                    session, LoginRequest(email=account.email, password="wrong-one")
+                )
+
+        with pytest.raises(LoginThrottleError):
+            await auth_service.authenticate(
+                session, LoginRequest(email=account.email, password=FIXTURE_PASSWORD)
+            )
+
+    async def test_successful_sign_ins_never_consume_the_budget(
+        self, session: AsyncSession, account: User
+    ):
+        for _ in range(MAX_ATTEMPTS_PER_ACCOUNT + 5):
+            await auth_service.authenticate(
+                session, LoginRequest(email=account.email, password=FIXTURE_PASSWORD)
+            )
+
+    async def test_a_success_resets_the_count(self, session: AsyncSession, account: User):
+        """Two typos then the right password must not leave the account primed."""
+        for _ in range(MAX_ATTEMPTS_PER_ACCOUNT - 1):
+            with pytest.raises(AuthenticationError):
+                await auth_service.authenticate(
+                    session, LoginRequest(email=account.email, password="wrong-one")
+                )
+
+        await auth_service.authenticate(
+            session, LoginRequest(email=account.email, password=FIXTURE_PASSWORD)
+        )
+
+        # The budget is fresh, so another near-full run of failures is possible.
+        for _ in range(MAX_ATTEMPTS_PER_ACCOUNT - 1):
+            with pytest.raises(AuthenticationError):
+                await auth_service.authenticate(
+                    session, LoginRequest(email=account.email, password="wrong-one")
+                )
+
+    async def test_guesses_against_an_unknown_email_are_also_counted(
+        self, session: AsyncSession
+    ):
+        """Otherwise an attacker enumerates freely as long as they miss."""
+        unknown = f"ghost@{DOMAIN}"
+        for _ in range(MAX_ATTEMPTS_PER_ACCOUNT):
+            with pytest.raises(AuthenticationError):
+                await auth_service.authenticate(
+                    session, LoginRequest(email=unknown, password="wrong-one")
+                )
+
+        with pytest.raises(LoginThrottleError):
+            await auth_service.authenticate(
+                session, LoginRequest(email=unknown, password="wrong-one")
+            )
+
+    async def test_one_locked_account_does_not_lock_another(
+        self, session: AsyncSession, account: User, business: Business
+    ):
+        for _ in range(MAX_ATTEMPTS_PER_ACCOUNT):
+            with pytest.raises(AuthenticationError):
+                await auth_service.authenticate(
+                    session, LoginRequest(email=account.email, password="wrong-one")
+                )
+
+        colleague = await auth_service.create_user(
+            session,
+            business.id,
+            UserCreate(
+                email=f"colleague@{DOMAIN}",
+                full_name="Ravi Kumar",
+                password=FIXTURE_PASSWORD,
+                role=UserRole.VIEWER,
+            ),
+        )
+        user, _ = await auth_service.authenticate(
+            session, LoginRequest(email=colleague.email, password=FIXTURE_PASSWORD)
+        )
+        assert user.id == colleague.id
+
+    async def test_the_endpoint_answers_429_once_locked(
+        self, client: AsyncClient, account: User
+    ):
+        for _ in range(MAX_ATTEMPTS_PER_ACCOUNT):
+            await client.post(
+                "/api/v1/auth/login",
+                json={"email": account.email, "password": "wrong-one"},
+            )
+
+        response = await client.post(
+            "/api/v1/auth/login",
+            json={"email": account.email, "password": FIXTURE_PASSWORD},
+        )
+        assert response.status_code == 429
+        assert response.json()["error"]["code"] == "too_many_attempts"
+
+    async def test_the_lockout_lifts_when_the_window_passes(
+        self, client: AsyncClient, account: User, fake_redis
+    ):
+        for _ in range(MAX_ATTEMPTS_PER_ACCOUNT):
+            await client.post(
+                "/api/v1/auth/login",
+                json={"email": account.email, "password": "wrong-one"},
+            )
+        fake_redis.advance(WINDOW_SECONDS + 1)
+
+        response = await client.post(
+            "/api/v1/auth/login",
+            json={"email": account.email, "password": FIXTURE_PASSWORD},
+        )
+        assert response.status_code == 200
 
 
 # --------------------------------------------------------------------------- #
