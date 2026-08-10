@@ -294,7 +294,9 @@ class TestIntentEndpoints:
         assert [i["name"] for i in response.json()] == ["live_one"]
 
     async def test_update_via_http(self, client, owner_headers, session, business):
-        intent = await agent_service.create_intent(session, business.id, IntentCreate(name="check_status"))
+        intent = await agent_service.create_intent(
+            session, business.id, IntentCreate(name="check_status")
+        )
 
         response = await client.patch(
             f"/api/v1/intents/{intent.id}", headers=owner_headers, json={"priority": 7}
@@ -303,7 +305,9 @@ class TestIntentEndpoints:
         assert response.json()["priority"] == 7
 
     async def test_delete_via_http(self, client, owner_headers, session, business):
-        intent = await agent_service.create_intent(session, business.id, IntentCreate(name="check_status"))
+        intent = await agent_service.create_intent(
+            session, business.id, IntentCreate(name="check_status")
+        )
 
         response = await client.delete(f"/api/v1/intents/{intent.id}", headers=owner_headers)
         assert response.status_code == 204
