@@ -12,11 +12,13 @@ import asyncio
 import uuid
 
 import pytest
+from fastapi import WebSocketDisconnect
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1 import monitor as monitor_api
+from app.core import events as events_module
 from app.core.deps import TenantContext
 from app.core.errors import ConflictError, NotFoundError, PermissionError_
 from app.core.events import EventType, InMemoryEventBus, LiveEvent, emit
@@ -381,6 +383,44 @@ class TestTakeover:
         with pytest.raises(NotFoundError):
             await monitoring.end_takeover(session, context_for(supervisor), call.id)
 
+    async def test_the_takeover_endpoint_hands_the_call_to_the_supervisor(
+        self,
+        client: AsyncClient,
+        call: CallLog,
+        supervisor_headers: dict[str, str],
+    ) -> None:
+        response = await client.post(
+            f"/api/v1/monitor/calls/{call.id}/takeover",
+            headers=supervisor_headers,
+            json={"reason": "caller confused"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["reason"] == "caller confused"
+        assert body["ended_at"] is None
+
+    async def test_the_release_endpoint_returns_the_call_to_the_ai(
+        self,
+        client: AsyncClient,
+        session: AsyncSession,
+        supervisor: User,
+        call: CallLog,
+        supervisor_headers: dict[str, str],
+    ) -> None:
+        await monitoring.start_takeover(session, context_for(supervisor), call.id)
+
+        response = await client.post(
+            f"/api/v1/monitor/calls/{call.id}/release",
+            headers=supervisor_headers,
+            json={},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["ended_at"] is not None
+        assert body["returned_to_ai"] is True
+
     async def test_a_takeover_is_closed_when_the_call_ends(
         self, session: AsyncSession, supervisor: User, call: CallLog
     ) -> None:
@@ -725,6 +765,129 @@ class TestMonitorSocket:
         await stop(task)
 
         assert socket.sent == []
+
+    async def test_a_quiet_channel_gets_a_keepalive_ping(
+        self, session: AsyncSession, supervisor: User, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(monitor_api, "KEEPALIVE_SECONDS", 0.01)
+        socket = FakeWebSocket()
+
+        task = await run_stream(socket, token_for(supervisor), None)
+        await asyncio.wait_for(socket.received.wait(), timeout=2)
+        await stop(task)
+
+        [ping] = socket.frames_of_type("ping")
+        assert "at" in ping
+
+    async def test_a_token_with_an_unparseable_subject_is_rejected(
+        self, session: AsyncSession, supervisor: User
+    ) -> None:
+        from jose import jwt as jose_jwt
+
+        from app.core.config import settings
+
+        bad_token = jose_jwt.encode(
+            {
+                "sub": "not-a-uuid",
+                "business_id": str(supervisor.business_id),
+                "role": supervisor.role,
+                "type": "access",
+            },
+            settings.jwt_secret,
+            algorithm=settings.jwt_algorithm,
+        )
+        socket = FakeWebSocket()
+
+        await monitor_api.stream(socket, bad_token, None)
+
+        assert socket.accepted is False
+        assert socket.closed[0] == 1008
+
+    async def test_a_token_for_the_wrong_business_is_rejected(
+        self, session: AsyncSession, supervisor: User, other_business: Business
+    ) -> None:
+        token, _ = create_access_token(
+            user_id=supervisor.id, business_id=other_business.id, role=supervisor.role
+        )
+        socket = FakeWebSocket()
+
+        await monitor_api.stream(socket, token, None)
+
+        assert socket.accepted is False
+        assert socket.closed[0] == 1008
+
+    async def test_a_client_disconnect_ends_the_stream_quietly(
+        self, session: AsyncSession, supervisor: User, business: Business
+    ) -> None:
+        class DisconnectingWebSocket(FakeWebSocket):
+            async def send_json(self, data: dict) -> None:
+                raise WebSocketDisconnect()
+
+        socket = DisconnectingWebSocket()
+        task = asyncio.create_task(monitor_api.stream(socket, token_for(supervisor), None))
+        await asyncio.sleep(0)
+        await emit(EventType.CALL_STARTED, business.id, call_id=uuid.uuid4())
+        await asyncio.wait_for(task, timeout=2)
+
+        # The handler returns on its own; there is nothing left to close.
+        assert socket.accepted is True
+        assert socket.closed is None
+
+    async def test_an_unexpected_error_closes_the_socket_with_an_internal_error(
+        self, session: AsyncSession, supervisor: User, business: Business
+    ) -> None:
+        class ExplodingWebSocket(FakeWebSocket):
+            async def send_json(self, data: dict) -> None:
+                raise RuntimeError("boom")
+
+        socket = ExplodingWebSocket()
+        task = asyncio.create_task(monitor_api.stream(socket, token_for(supervisor), None))
+        await asyncio.sleep(0)
+        await emit(EventType.CALL_STARTED, business.id, call_id=uuid.uuid4())
+        await asyncio.wait_for(task, timeout=2)
+
+        assert socket.closed[0] == 1011
+
+    async def test_a_close_that_also_fails_does_not_raise(
+        self, session: AsyncSession, supervisor: User, business: Business
+    ) -> None:
+        class AlreadyGoneWebSocket(FakeWebSocket):
+            async def send_json(self, data: dict) -> None:
+                raise RuntimeError("boom")
+
+            async def close(self, code: int = 1000, reason: str | None = None) -> None:
+                raise RuntimeError("already closed")
+
+        socket = AlreadyGoneWebSocket()
+        task = asyncio.create_task(monitor_api.stream(socket, token_for(supervisor), None))
+        await asyncio.sleep(0)
+
+        # Must not raise even though both the send and the close attempt fail.
+        await emit(EventType.CALL_STARTED, business.id, call_id=uuid.uuid4())
+        await asyncio.wait_for(task, timeout=2)
+
+    async def test_the_relay_exits_cleanly_when_the_bus_stops_yielding(
+        self, session: AsyncSession, supervisor: User
+    ) -> None:
+        class ExhaustedBus:
+            async def publish(self, event: LiveEvent) -> None:
+                return None
+
+            async def subscribe(self, business_id: uuid.UUID):
+                return
+                yield  # pragma: no cover - never reached; makes this an async generator
+
+        events_module.set_event_bus(ExhaustedBus())
+        socket = FakeWebSocket()
+
+        # The bus's stream ends immediately, so the handler should return on
+        # its own rather than hang waiting for a next event.
+        await asyncio.wait_for(
+            monitor_api.stream(socket, token_for(supervisor), None), timeout=2
+        )
+
+        assert socket.accepted is True
+        assert socket.closed is None
 
 
 # --------------------------------------------------------------------------- #
