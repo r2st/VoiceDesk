@@ -7,6 +7,7 @@ only on the result.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
@@ -33,6 +34,8 @@ class FakeRedis:
         #: key -> monotonic deadline, in the same units as ``clock``.
         self.deadlines: dict[str, float] = {}
         self.clock = clock or time.monotonic
+        #: channel -> queues of subscribers, for the pub/sub fake below.
+        self._subscribers: dict[str, list[asyncio.Queue[dict[str, Any]]]] = {}
 
     # -- internals --------------------------------------------------------- #
     def _expired(self, key: str) -> bool:
@@ -125,6 +128,48 @@ class FakeRedis:
 
     async def ping(self) -> bool:
         return True
+
+    async def aclose(self) -> None:
+        return None
+
+    # -- pub/sub ------------------------------------------------------------ #
+    def pubsub(self) -> FakePubSub:
+        return FakePubSub(self)
+
+    async def publish(self, channel: str, message: str) -> int:
+        subscribers = self._subscribers.get(channel, [])
+        for queue in subscribers:
+            queue.put_nowait({"type": "message", "channel": channel, "data": message})
+        return len(subscribers)
+
+
+class FakePubSub:
+    """Just enough of redis-py's async PubSub for :class:`RedisEventBus`."""
+
+    def __init__(self, redis: FakeRedis) -> None:
+        self._redis = redis
+        self._channels: set[str] = set()
+        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    async def subscribe(self, *channels: str) -> None:
+        for channel in channels:
+            self._channels.add(channel)
+            self._redis._subscribers.setdefault(channel, []).append(self._queue)
+
+    async def get_message(
+        self, *, ignore_subscribe_messages: bool = False, timeout: float | None = None
+    ) -> dict[str, Any] | None:
+        try:
+            return await asyncio.wait_for(self._queue.get(), timeout=timeout)
+        except TimeoutError:
+            return None
+
+    async def unsubscribe(self, *channels: str) -> None:
+        for channel in channels or list(self._channels):
+            subscribers = self._redis._subscribers.get(channel, [])
+            if self._queue in subscribers:
+                subscribers.remove(self._queue)
+            self._channels.discard(channel)
 
     async def aclose(self) -> None:
         return None

@@ -96,7 +96,7 @@ class EventBus(Protocol):
 
     def subscribe(self, business_id: uuid.UUID) -> AsyncIterator[LiveEvent]:
         """Async iterator over this tenant's events, starting from now."""
-        ...
+        ...  # pragma: no cover - structural stub; implementations don't inherit this body
 
 
 class RedisEventBus:
