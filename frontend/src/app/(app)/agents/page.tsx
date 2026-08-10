@@ -8,6 +8,7 @@ import { useApi } from "@/lib/use-api";
 import { duration, languageName, percent, titleCase } from "@/lib/format";
 import { Badge, Card, EmptyState, ErrorNotice, Spinner, type BadgeTone } from "@/components/ui";
 import type { AgentStatus, VoiceAgent } from "@/lib/types";
+import { IntentsSection } from "./intents-section";
 
 const AGENT_TONE: Record<AgentStatus, BadgeTone> = {
   active: "success",
@@ -56,6 +57,8 @@ export default function AgentsPage() {
           ))}
         </div>
       )}
+
+      <IntentsSection agents={agents.data?.items ?? []} canManage={canManage} />
     </div>
   );
 }

@@ -17,6 +17,16 @@ export type AgentUseCase =
   | "lead_qualification"
   | "order_status"
   | "customer_support";
+export type IntentActionType =
+  | "book_appointment"
+  | "check_order_status"
+  | "collect_payment"
+  | "qualify_lead"
+  | "transfer_human"
+  | "whatsapp_handoff"
+  | "webhook"
+  | "end_call"
+  | "none";
 export type CallDirection = "inbound" | "outbound";
 export type CallStatus =
   | "queued"
@@ -175,6 +185,21 @@ export interface VoiceAgent {
   recording_enabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface Intent {
+  id: string;
+  business_id: string;
+  /** The agent it is scoped to, or null for every agent in the business. */
+  agent_id: string | null;
+  name: string;
+  description: string;
+  sample_phrases: string[];
+  action_type: IntentActionType;
+  parameters_json: Record<string, unknown>;
+  is_active: boolean;
+  priority: number;
+  created_at: string;
 }
 
 export interface Call {

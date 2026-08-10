@@ -25,17 +25,21 @@ export function TextField({
   required = false,
   disabled = false,
   autoComplete,
+  min,
+  max,
 }: {
   id: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
   hint?: string;
-  type?: "text" | "email" | "tel" | "password";
+  type?: "text" | "email" | "tel" | "password" | "number";
   placeholder?: string;
   required?: boolean;
   disabled?: boolean;
   autoComplete?: string;
+  min?: number;
+  max?: number;
 }) {
   return (
     <div>
@@ -53,6 +57,52 @@ export function TextField({
         required={required}
         disabled={disabled}
         autoComplete={autoComplete}
+        min={min}
+        max={max}
+        onChange={(event) => onChange(event.target.value)}
+        className={`mt-1.5 ${CONTROL}`}
+      />
+      {hint ? <p className="mt-1 text-xs text-ink-400">{hint}</p> : null}
+    </div>
+  );
+}
+
+export function TextareaField({
+  id,
+  label,
+  value,
+  onChange,
+  hint,
+  placeholder,
+  required = false,
+  disabled = false,
+  rows = 3,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  hint?: string;
+  placeholder?: string;
+  required?: boolean;
+  disabled?: boolean;
+  rows?: number;
+}) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium text-ink-700">
+        {label}
+        {required ? null : (
+          <span className="ml-1 font-normal text-ink-400">(optional)</span>
+        )}
+      </label>
+      <textarea
+        id={id}
+        value={value}
+        placeholder={placeholder}
+        required={required}
+        disabled={disabled}
+        rows={rows}
         onChange={(event) => onChange(event.target.value)}
         className={`mt-1.5 ${CONTROL}`}
       />

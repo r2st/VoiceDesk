@@ -21,6 +21,8 @@ import type {
   ConversationTurn,
   CurrentUsage,
   DashboardSummary,
+  Intent,
+  IntentActionType,
   Lead,
   LeadDetail,
   LeadStatus,
@@ -258,6 +260,22 @@ export const api = {
     get: (id: string) => request<VoiceAgent>(`/agents/${id}`),
     update: (id: string, patch: Partial<VoiceAgent>) =>
       request<VoiceAgent>(`/agents/${id}`, { method: "PATCH", body: patch }),
+  },
+
+  intents: {
+    list: (params: { agent_id?: string; active_only?: boolean } = {}) =>
+      request<Intent[]>("/intents", { query: params }),
+    create: (body: {
+      name: string;
+      description?: string;
+      sample_phrases?: string[];
+      action_type?: IntentActionType;
+      agent_id?: string | null;
+      priority?: number;
+    }) => request<Intent>("/intents", { method: "POST", body }),
+    setActive: (id: string, is_active: boolean) =>
+      request<Intent>(`/intents/${id}`, { method: "PATCH", body: { is_active } }),
+    remove: (id: string) => request<void>(`/intents/${id}`, { method: "DELETE" }),
   },
 
   calls: {
