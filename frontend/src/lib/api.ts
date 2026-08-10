@@ -136,8 +136,28 @@ async function toApiError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, code, message, details);
 }
 
-/** Refreshes the token pair in place. Returns false if the session is over. */
+/**
+ * Refreshes the token pair in place. Returns false if the session is over.
+ *
+ * The backend rotates refresh tokens on use and treats a second presentation
+ * of an already-rotated token as theft, revoking the whole session family.
+ * A dashboard page routinely fires several requests in parallel (see
+ * `useApi`), so if the access token has expired, they would all hit 401 at
+ * once and race to refresh — the loser's "reuse" would log the user out of
+ * every session, not just refresh its own. `inFlight` collapses concurrent
+ * callers onto the single underlying request instead.
+ */
+let inFlight: Promise<boolean> | null = null;
+
 async function refreshSession(): Promise<boolean> {
+  if (inFlight) return inFlight;
+  inFlight = doRefresh().finally(() => {
+    inFlight = null;
+  });
+  return inFlight;
+}
+
+async function doRefresh(): Promise<boolean> {
   const refreshToken = tokens.refresh();
   if (!refreshToken) return false;
 
