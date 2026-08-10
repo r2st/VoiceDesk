@@ -48,6 +48,8 @@ export type CallResolution =
 export type Sentiment = "positive" | "neutral" | "negative";
 export type SpeakerRole = "caller" | "agent" | "system" | "human";
 export type Language = "hi" | "en" | "ta" | "te" | "mr" | "bn" | "kn";
+export type QualityGrade = "good" | "fair" | "poor";
+export type VoicemailStatus = "pending" | "transcribing" | "transcribed" | "failed";
 
 export interface Page<T> {
   items: T[];
@@ -180,11 +182,23 @@ export interface VoiceAgent {
   flow_json: Record<string, unknown>;
   flow_version: number;
   max_call_duration_sec: number;
+  max_concurrent_calls: number;
   handoff_confidence_threshold: number;
   whatsapp_handoff_enabled: boolean;
   recording_enabled: boolean;
+  voicemail_enabled: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentAvailability {
+  agent_id: string;
+  name: string;
+  status: AgentStatus;
+  active_calls: number;
+  max_concurrent_calls: number;
+  is_available: boolean;
+  reason: string | null;
 }
 
 export interface Intent {
@@ -374,7 +388,10 @@ export type LiveEventType =
   | "transcript.turn"
   | "takeover.started"
   | "takeover.ended"
-  | "call.handoff";
+  | "call.handoff"
+  | "call.quality_sample"
+  | "call.quality_degraded"
+  | "voicemail.received";
 
 export interface LiveEvent {
   type: LiveEventType;
@@ -397,6 +414,51 @@ export interface PingFrame {
 }
 
 export type StreamFrame = LiveEvent | SnapshotFrame | PingFrame;
+
+// --------------------------------------------------------------------------- //
+// Call quality
+// --------------------------------------------------------------------------- //
+export interface QualitySample {
+  id: string;
+  call_id: string;
+  sampled_at: string;
+  latency_ms: number;
+  jitter_ms: number;
+  packet_loss_pct: number;
+  mos_score: number | null;
+  grade: QualityGrade;
+  source: string;
+}
+
+export interface QualitySummary {
+  call_id: string;
+  sample_count: number;
+  avg_latency_ms: number | null;
+  max_latency_ms: number | null;
+  avg_jitter_ms: number | null;
+  max_jitter_ms: number | null;
+  avg_packet_loss_pct: number | null;
+  max_packet_loss_pct: number | null;
+  worst_grade: QualityGrade | null;
+}
+
+// --------------------------------------------------------------------------- //
+// Voicemail
+// --------------------------------------------------------------------------- //
+export interface Voicemail {
+  id: string;
+  business_id: string;
+  call_id: string;
+  phone_number_id: string | null;
+  caller_number: string;
+  duration_sec: number;
+  status: VoicemailStatus;
+  transcript: string | null;
+  transcribed_at: string | null;
+  listened_at: string | null;
+  is_unheard: boolean;
+  created_at: string;
+}
 
 // --------------------------------------------------------------------------- //
 // Leads (design doc §4.9)

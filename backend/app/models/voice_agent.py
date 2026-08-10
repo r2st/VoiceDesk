@@ -47,6 +47,9 @@ class VoiceAgent(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     flow_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
 
     max_call_duration_sec: Mapped[int] = mapped_column(Integer, default=600, nullable=False)
+    #: Concurrent live calls this agent can hold before routing treats it as busy.
+    max_concurrent_calls: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    voicemail_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     #: Below this LLM confidence the call is handed off (design doc §4.5).
     handoff_confidence_threshold: Mapped[float] = mapped_column(Float, default=0.70, nullable=False)
     whatsapp_handoff_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

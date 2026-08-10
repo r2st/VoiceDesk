@@ -1,0 +1,12 @@
+node_modules/
+.next/
+out/
+.turbo/
+.env
+.env.*
+!.env.example
+*.test.ts
+*.test.tsx
+.pytest_cache/
+.benchmarks/
+tsconfig.tsbuildinfo

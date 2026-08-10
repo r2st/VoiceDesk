@@ -9,6 +9,7 @@ changes as they are produced.
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated
@@ -42,6 +43,11 @@ router = APIRouter(prefix="/monitor", tags=["monitoring"])
 #: Sent when the tenant's channel is quiet, so a dead connection is noticed
 #: rather than lingering until the proxy's read timeout closes it.
 KEEPALIVE_SECONDS = 20.0
+
+#: How often a long-lived connection re-checks that its user is still active.
+#: A busy channel could otherwise stream to a deactivated user indefinitely,
+#: since the token itself stays valid until it expires.
+REAUTH_INTERVAL_SECONDS = 300.0
 
 #: Roles allowed to watch and take over calls.
 MONITOR_ROLES = (UserRole.OWNER, UserRole.ADMIN, UserRole.SUPERVISOR)
@@ -161,23 +167,85 @@ async def stream(
 
 
 async def _relay(websocket: WebSocket, context: TenantContext, call_id: uuid.UUID | None) -> None:
-    """Pump tenant events to the socket until the client goes away."""
-    async with watch(context.business_id) as events:
-        while True:
-            try:
-                event = await asyncio.wait_for(events.__anext__(), timeout=KEEPALIVE_SECONDS)
-            except TimeoutError:
-                # A quiet channel still has to prove the socket is alive.
-                await websocket.send_json({"type": "ping", "at": datetime.now(UTC).isoformat()})
-                continue
-            except StopAsyncIteration:
-                break
+    """Pump tenant events to the socket until the client goes away.
 
-            # One channel carries the whole tenant, so a pane pinned to a single
-            # call filters here rather than holding its own subscription.
-            if call_id is not None and event.call_id != call_id:
-                continue
-            await websocket.send_json(event.to_dict())
+    The subscription's next event is held in a persistent task (``pending``)
+    reused across keepalive timeouts, and waited on with ``asyncio.wait``
+    rather than ``asyncio.wait_for``. ``wait_for`` cancels whatever it wraps
+    when it times out; doing that to the subscription's ``__anext__()``
+    permanently closes the underlying async generator, since a cancellation
+    raised inside it is never caught. The very first quiet moment on any
+    connection would then silently end its subscription for good — the
+    socket stays open, but nothing is ever relayed on it again.
+    ``asyncio.wait`` leaves a still-pending task alone on timeout, so the same
+    ``__anext__()`` call is simply waited on again next iteration.
+
+    A long-lived connection also re-validates its user on an interval
+    independent of message traffic — a busy channel would otherwise never hit
+    the keepalive's idle-timeout branch, and a user deactivated mid-session
+    would keep streaming until the token itself expired.
+    """
+    last_reauth = time.monotonic()
+    async with watch(context.business_id) as events:
+        pending = asyncio.ensure_future(events.__anext__())
+        try:
+            while True:
+                done, _ = await asyncio.wait({pending}, timeout=KEEPALIVE_SECONDS)
+                if not done:
+                    # A quiet channel still has to prove the socket is alive.
+                    # ``pending`` is untouched — reused on the next iteration.
+                    await websocket.send_json(
+                        {"type": "ping", "at": datetime.now(UTC).isoformat()}
+                    )
+                    last_reauth = await _reauth_if_due(websocket, context, last_reauth)
+                    if last_reauth is None:
+                        return
+                    continue
+
+                try:
+                    event = pending.result()
+                except StopAsyncIteration:
+                    break
+                pending = asyncio.ensure_future(events.__anext__())
+
+                last_reauth = await _reauth_if_due(websocket, context, last_reauth)
+                if last_reauth is None:
+                    return
+
+                # One channel carries the whole tenant, so a pane pinned to a
+                # single call filters here rather than holding its own subscription.
+                if call_id is not None and event.call_id != call_id:
+                    continue
+                await websocket.send_json(event.to_dict())
+        finally:
+            pending.cancel()
+            try:
+                await pending
+            except (asyncio.CancelledError, StopAsyncIteration, Exception):
+                pass
+
+
+async def _reauth_if_due(
+    websocket: WebSocket, context: TenantContext, last_reauth: float
+) -> float | None:
+    """Re-check the user is still active if the interval has elapsed.
+
+    Returns the (possibly refreshed) timestamp, or ``None`` if the socket was
+    closed because the user is no longer active.
+    """
+    now = time.monotonic()
+    if now - last_reauth < REAUTH_INTERVAL_SECONDS:
+        return last_reauth
+
+    async with get_sessionmaker()() as session:
+        user = await session.get(User, context.user_id)
+    if user is None or user.deleted_at is not None or not user.is_active:
+        logger.info("Closing monitor stream for %s: no longer active", context.email)
+        await websocket.close(
+            code=status.WS_1008_POLICY_VIOLATION, reason="User is no longer active."
+        )
+        return None
+    return now
 
 
 async def _send_snapshot(websocket: WebSocket, context: TenantContext, call_id: uuid.UUID) -> None:

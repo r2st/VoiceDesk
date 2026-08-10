@@ -9,6 +9,7 @@
  */
 
 import type {
+  AgentAvailability,
   AgentLeaderboardEntry,
   Appointment,
   AppointmentStatus,
@@ -33,6 +34,8 @@ import type {
   PipelineSummary,
   Plan,
   QualificationConfig,
+  QualitySample,
+  QualitySummary,
   QuotaStatus,
   ScheduleConfig,
   Slot,
@@ -42,6 +45,7 @@ import type {
   User,
   UserRole,
   VoiceAgent,
+  Voicemail,
 } from "./types";
 
 export const API_BASE =
@@ -280,6 +284,8 @@ export const api = {
     get: (id: string) => request<VoiceAgent>(`/agents/${id}`),
     update: (id: string, patch: Partial<VoiceAgent>) =>
       request<VoiceAgent>(`/agents/${id}`, { method: "PATCH", body: patch }),
+    /** Live routing standing for every agent — who can take the next call. */
+    availability: () => request<AgentAvailability[]>("/agents/availability"),
   },
 
   intents: {
@@ -309,6 +315,10 @@ export const api = {
     get: (id: string) => request<CallDetail>(`/calls/${id}`),
     transcript: (id: string) =>
       request<ConversationTurn[]>(`/calls/${id}/transcript`),
+    qualitySamples: (id: string) =>
+      request<QualitySample[]>(`/calls/${id}/quality`),
+    qualitySummary: (id: string) =>
+      request<QualitySummary>(`/calls/${id}/quality/summary`),
   },
 
   monitor: {
@@ -426,5 +436,25 @@ export const api = {
       if (!response.ok) throw await toApiError(response);
       return response.blob();
     },
+  },
+
+  voicemails: {
+    list: (params: { unheard_only?: boolean; limit?: number; offset?: number } = {}) =>
+      request<Page<Voicemail>>("/voicemails", { query: params }),
+    get: (id: string) => request<Voicemail>(`/voicemails/${id}`),
+    /** Decrypted audio for a voicemail, the same way call recordings stream. */
+    stream: async (id: string): Promise<Blob> => {
+      const response = await rawRequest(`/voicemails/${id}/stream`);
+      if (!response.ok) throw await toApiError(response);
+      return response.blob();
+    },
+    listen: (id: string) =>
+      request<Voicemail>(`/voicemails/${id}/listen`, { method: "POST" }),
+    setTranscript: (id: string, transcript: string) =>
+      request<Voicemail>(`/voicemails/${id}/transcript`, {
+        method: "POST",
+        body: { transcript },
+      }),
+    remove: (id: string) => request<void>(`/voicemails/${id}`, { method: "DELETE" }),
   },
 };

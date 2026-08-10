@@ -28,8 +28,10 @@ from app.models.enums import (
     HandoffStatus,
     Language,
     PhoneNumberStatus,
+    QualityGrade,
     SpeakerRole,
     TelephonyProvider,
+    VoicemailStatus,
 )
 
 
@@ -131,6 +133,7 @@ class CallLog(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
         back_populates="call", lazy="noload", order_by="Conversation.turn_index"
     )
     recording: Mapped[CallRecording | None] = relationship(back_populates="call", lazy="noload")
+    voicemail: Mapped[Voicemail | None] = relationship(back_populates="call", lazy="noload")
 
     __table_args__ = (
         Index("ix_call_logs_business_created", "business_id", "created_at"),
@@ -207,6 +210,90 @@ class CallRecording(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
     purged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     call: Mapped[CallLog] = relationship(back_populates="recording", lazy="noload")
+
+
+class CallQualityMetric(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """One media-quality sample reported for a live or completed call.
+
+    Samples are appended by the media edge every few seconds while a call is
+    in progress. Rows are never updated — the grade is derived from the raw
+    numbers at read time, so a threshold change applies retroactively without
+    a backfill.
+    """
+
+    __tablename__ = "call_quality_metrics"
+
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    call_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("call_logs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sampled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    jitter_ms: Mapped[float] = mapped_column(Float, nullable=False)
+    packet_loss_pct: Mapped[float] = mapped_column(Float, nullable=False)
+    #: Mean Opinion Score estimate (1.0-5.0), when the media edge computes one.
+    mos_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    grade: Mapped[str] = mapped_column(String(10), default=QualityGrade.GOOD, nullable=False)
+    #: Where the sample came from, e.g. "media_edge", "sip_probe".
+    source: Mapped[str] = mapped_column(String(40), default="media_edge", nullable=False)
+
+    __table_args__ = (
+        Index("ix_call_quality_metrics_call_sampled", "call_id", "sampled_at"),
+        Index("ix_call_quality_metrics_business_created", "business_id", "created_at"),
+    )
+
+
+class Voicemail(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):
+    """A message a caller left instead of reaching an agent.
+
+    Audio is stored encrypted the same way call recordings are (design doc
+    §2.4); the row also tracks transcription state and whether an operator has
+    listened to it yet, which is what the dashboard's unread badge counts.
+    """
+
+    __tablename__ = "voicemails"
+
+    business_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("businesses.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    call_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("call_logs.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    phone_number_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID, ForeignKey("phone_numbers.id", ondelete="SET NULL"), nullable=True
+    )
+    caller_number: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+
+    storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    storage_bucket: Mapped[str] = mapped_column(String(120), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), default="audio/ogg", nullable=False)
+    format: Mapped[str] = mapped_column(String(20), default="opus", nullable=False)
+    duration_sec: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    status: Mapped[str] = mapped_column(
+        String(20), default=VoicemailStatus.PENDING, nullable=False
+    )
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transcribed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    listened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    listened_by: Mapped[uuid.UUID | None] = mapped_column(
+        GUID, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    call: Mapped[CallLog] = relationship(back_populates="voicemail", lazy="noload")
+
+    __table_args__ = (
+        Index("ix_voicemails_business_created", "business_id", "created_at"),
+    )
+
+    @property
+    def is_unheard(self) -> bool:
+        return self.listened_at is None and self.deleted_at is None
 
 
 class WhatsAppHandoff(Base, UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin):

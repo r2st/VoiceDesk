@@ -1,0 +1,135 @@
+# Production stack for a single Hetzner VPS.
+#
+# Postgres/Redis/MinIO are self-hosted here rather than managed services: at
+# single-VPS scale a managed DB would be a second bill and a second place for
+# things to go wrong, and the systemd units below already give us restart
+# policies and log capture without one. Swap them for managed equivalents by
+# pointing DATABASE_URL / REDIS_URL / S3_* at the managed endpoint and
+# deleting the corresponding service — nothing else in this file assumes
+# they're local.
+#
+# `caddy` is the only container that publishes ports; every other service is
+# reachable only on the internal network, so the API and dashboard cannot be
+# hit directly over HTTP even if a firewall rule is missed.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-voicedesk}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-voicedesk}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-voicedesk} -d ${POSTGRES_DB:-voicedesk}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [voicedesk]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [voicedesk]
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    env_file: .env
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [voicedesk]
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      VOICEDESK_ENV: production
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+    networks: [voicedesk]
+    # Runs the pending alembic migration on every start, before uvicorn takes
+    # traffic. Idempotent — alembic no-ops when already at head — so this is
+    # safe to run on every container start, not just the first.
+    entrypoint: ["/bin/sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 3010"]
+
+  worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      VOICEDESK_ENV: production
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [voicedesk]
+    # The worker has no HTTP port, so the image's curl-based healthcheck
+    # (meant for the API process) would always fail here.
+    healthcheck: { disable: true }
+    command: ["python", "-m", "app.workers.run_worker"]
+
+  dashboard:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks: [voicedesk]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      DOMAIN: ${DOMAIN}
+      API_DOMAIN: ${API_DOMAIN}
+    depends_on:
+      - api
+      - dashboard
+    networks: [voicedesk]
+
+networks:
+  voicedesk:
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  caddy_data:
+  caddy_config:

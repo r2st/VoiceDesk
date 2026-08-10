@@ -23,9 +23,12 @@ class VoiceAgentBase(BaseModel):
     greeting: Annotated[str | None, Field(default=None, max_length=2000)] = None
     fallback_message: Annotated[str | None, Field(default=None, max_length=2000)] = None
     max_call_duration_sec: Annotated[int, Field(ge=30, le=3600)] = 600
+    #: Concurrent live calls this agent can hold before routing treats it as busy.
+    max_concurrent_calls: Annotated[int, Field(ge=1, le=200)] = 5
     handoff_confidence_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.70
     whatsapp_handoff_enabled: bool = True
     recording_enabled: bool = True
+    voicemail_enabled: bool = True
 
     @field_validator("supported_languages")
     @classmethod
@@ -55,11 +58,13 @@ class VoiceAgentUpdate(BaseModel):
     greeting: Annotated[str | None, Field(default=None, max_length=2000)] = None
     fallback_message: Annotated[str | None, Field(default=None, max_length=2000)] = None
     max_call_duration_sec: Annotated[int | None, Field(default=None, ge=30, le=3600)] = None
+    max_concurrent_calls: Annotated[int | None, Field(default=None, ge=1, le=200)] = None
     handoff_confidence_threshold: Annotated[float | None, Field(default=None, ge=0.0, le=1.0)] = (
         None
     )
     whatsapp_handoff_enabled: bool | None = None
     recording_enabled: bool | None = None
+    voicemail_enabled: bool | None = None
 
 
 class FlowUpdate(BaseModel):
@@ -82,11 +87,25 @@ class VoiceAgentOut(ORMModel):
     flow_json: dict
     flow_version: int
     max_call_duration_sec: int
+    max_concurrent_calls: int
     handoff_confidence_threshold: float
     whatsapp_handoff_enabled: bool
     recording_enabled: bool
+    voicemail_enabled: bool
     created_at: datetime
     updated_at: datetime
+
+
+class AgentAvailabilityOut(BaseModel):
+    """One agent's current standing for inbound routing."""
+
+    agent_id: uuid.UUID
+    name: str
+    status: AgentStatus
+    active_calls: int
+    max_concurrent_calls: int
+    is_available: bool
+    reason: str | None = None
 
 
 class FlowValidationResult(BaseModel):

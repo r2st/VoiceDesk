@@ -1,0 +1,12 @@
+[Unit]
+Description=VoiceDesk Postgres backup
+After=voicedesk.service
+Requires=voicedesk.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/voicedesk/deploy
+ExecStart=/opt/voicedesk/deploy/backup.sh
+# A stuck pg_dump on a large database is a problem to alert on, not to let
+# run indefinitely and collide with the next night's timer firing.
+TimeoutStartSec=1800

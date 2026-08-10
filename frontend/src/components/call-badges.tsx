@@ -2,7 +2,13 @@
 
 import { Badge, type BadgeTone } from "@/components/ui";
 import { titleCase } from "@/lib/format";
-import type { CallResolution, CallStatus, Sentiment } from "@/lib/types";
+import type {
+  CallResolution,
+  CallStatus,
+  QualityGrade,
+  Sentiment,
+  VoicemailStatus,
+} from "@/lib/types";
 
 const STATUS_TONE: Record<CallStatus, BadgeTone> = {
   queued: "neutral",
@@ -56,4 +62,26 @@ export function ResolutionBadge({ resolution }: { resolution: CallResolution }) 
 export function SentimentBadge({ sentiment }: { sentiment: Sentiment | null }) {
   if (!sentiment) return <span className="text-ink-400">—</span>;
   return <Badge tone={SENTIMENT_TONE[sentiment]}>{titleCase(sentiment)}</Badge>;
+}
+
+const QUALITY_TONE: Record<QualityGrade, BadgeTone> = {
+  good: "success",
+  fair: "warning",
+  poor: "danger",
+};
+
+export function QualityBadge({ grade }: { grade: QualityGrade | null }) {
+  if (!grade) return <span className="text-ink-400">—</span>;
+  return <Badge tone={QUALITY_TONE[grade]}>{titleCase(grade)}</Badge>;
+}
+
+const VOICEMAIL_STATUS_TONE: Record<VoicemailStatus, BadgeTone> = {
+  pending: "neutral",
+  transcribing: "info",
+  transcribed: "success",
+  failed: "danger",
+};
+
+export function VoicemailStatusBadge({ status }: { status: VoicemailStatus }) {
+  return <Badge tone={VOICEMAIL_STATUS_TONE[status]}>{titleCase(status)}</Badge>;
 }

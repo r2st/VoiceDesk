@@ -310,6 +310,25 @@ async def agent(session: AsyncSession, business: Business) -> VoiceAgent:
 
 
 @pytest_asyncio.fixture
+async def second_agent(session: AsyncSession, business: Business) -> VoiceAgent:
+    """A second active agent on the same tenant — routing fallback tests."""
+    row = VoiceAgent(
+        business_id=business.id,
+        name="Overflow Agent",
+        use_case="customer_support",
+        status=AgentStatus.ACTIVE,
+        language=Language.HINDI,
+        supported_languages=[Language.HINDI, Language.ENGLISH],
+        persona="You are a backup receptionist for a diagnostics clinic.",
+        greeting="Namaste! Sunrise Diagnostics mein aapka swagat hai.",
+        flow_json=default_flow("Namaste!", "customer_support"),
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+@pytest_asyncio.fixture
 async def phone_number(session: AsyncSession, business: Business, agent: VoiceAgent) -> PhoneNumber:
     row = PhoneNumber(
         business_id=business.id,

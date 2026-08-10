@@ -1,0 +1,48 @@
+# Reverse proxy + automatic TLS for the VoiceDesk stack.
+#
+# Caddy requests and renews Let's Encrypt certificates for both hostnames on
+# its own — no certbot, no cron renewal job. DOMAIN and API_DOMAIN come from
+# the compose file's environment (ultimately deploy/.env on the host).
+
+{$API_DOMAIN} {
+	reverse_proxy api:3010
+
+	# Webhooks and long call recordings can run past Caddy's default; the
+	# telephony provider retries on timeout, and a retried webhook duplicates
+	# work the idempotency key then has to absorb.
+	timeouts {
+		read_body 30s
+		write     60s
+	}
+
+	encode gzip
+	log {
+		output file /data/access-api.log {
+			roll_size 50mb
+			roll_keep 5
+		}
+	}
+}
+
+{$DOMAIN} {
+	reverse_proxy dashboard:3011
+
+	# The monitor page's live feed is a WebSocket through this same host;
+	# reverse_proxy upgrades it automatically, this just keeps a quiet
+	# connection from being reaped by an intermediate idle timeout.
+	@websocket {
+		header Connection *Upgrade*
+		header Upgrade    websocket
+	}
+	handle @websocket {
+		reverse_proxy dashboard:3011
+	}
+
+	encode gzip
+	log {
+		output file /data/access-dashboard.log {
+			roll_size 50mb
+			roll_keep 5
+		}
+	}
+}

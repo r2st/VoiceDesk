@@ -216,3 +216,18 @@ class HandoffStatus(StrEnum):
     SENT = "sent"
     FAILED = "failed"
     ACKNOWLEDGED = "acknowledged"
+
+
+class QualityGrade(StrEnum):
+    """How a call sounded, derived from its worst recent samples."""
+
+    GOOD = "good"
+    FAIR = "fair"
+    POOR = "poor"
+
+
+class VoicemailStatus(StrEnum):
+    PENDING = "pending"
+    TRANSCRIBING = "transcribing"
+    TRANSCRIBED = "transcribed"
+    FAILED = "failed"

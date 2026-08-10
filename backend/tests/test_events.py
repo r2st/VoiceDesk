@@ -17,7 +17,7 @@ from app.core.events import (
     get_event_bus,
     set_event_bus,
 )
-from tests.fakes import FakeRedis
+from tests.fakes import FakePubSub, FakeRedis
 
 
 def test_channel_for_is_namespaced_per_tenant() -> None:
@@ -121,6 +121,44 @@ class TestRedisEventBus:
 
         received = await next_event
         assert received.type == EventType.CALL_STATUS
+        await stream.aclose()  # type: ignore[attr-defined]
+
+    async def test_subscribe_recovers_from_a_dropped_connection(
+        self, fake_redis: FakeRedis, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A broken Redis connection is retried, not left to kill every socket."""
+        monkeypatch.setattr("app.core.events.RECONNECT_BACKOFF_SECONDS", 0.001)
+        monkeypatch.setattr("app.core.events.POLL_INTERVAL_SECONDS", 0.01)
+
+        original_get_message = FakePubSub.get_message
+        state = {"raised": False}
+
+        async def flaky_get_message(self, **kwargs):
+            if not state["raised"]:
+                state["raised"] = True
+                raise ConnectionError("simulated Redis blip")
+            return await original_get_message(self, **kwargs)
+
+        monkeypatch.setattr(FakePubSub, "get_message", flaky_get_message)
+
+        business_id = uuid.uuid4()
+        channel = channel_for(business_id)
+        bus = RedisEventBus()
+        stream = bus.subscribe(business_id)
+        next_event = asyncio.ensure_future(anext(stream))
+
+        # Wait for the failure to be hit and a second subscription to replace it.
+        for _ in range(200):
+            if state["raised"] and len(fake_redis._subscribers.get(channel, [])) >= 2:
+                break
+            await asyncio.sleep(0)
+        else:
+            raise AssertionError("subscription never recovered from the dropped connection")
+
+        await bus.publish(LiveEvent(type=EventType.CALL_STARTED, business_id=business_id))
+
+        received = await asyncio.wait_for(next_event, timeout=2)
+        assert received.type == EventType.CALL_STARTED
         await stream.aclose()  # type: ignore[attr-defined]
 
     async def test_subscribe_unsubscribes_when_the_consumer_stops(

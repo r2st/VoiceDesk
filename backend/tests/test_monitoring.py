@@ -76,8 +76,26 @@ class FakeWebSocket:
 async def run_stream(socket: FakeWebSocket, token: str, call_id: uuid.UUID | None = None):
     """Start the WebSocket handler in the background; the caller cancels it."""
     task = asyncio.create_task(monitor_api.stream(socket, token, call_id))
-    await asyncio.sleep(0)  # let it reach the first await
+    await wait_subscribed()
     return task
+
+
+async def wait_subscribed() -> None:
+    """Spin until the in-memory bus has registered the handler's subscription.
+
+    The relay hands the subscription's next event off to a task it reuses
+    across keepalive timeouts rather than awaiting the bus's generator inline
+    (design doc §4.3 WebSocket resilience) — reaching the generator's first
+    real suspension point takes an extra event-loop tick versus a bare
+    ``await``, so a single ``sleep(0)`` is not always enough for the
+    subscription to be registered before a test publishes.
+    """
+    bus = events_module.get_event_bus()
+    for _ in range(200):
+        if getattr(bus, "_queues", None):
+            return
+        await asyncio.sleep(0)
+    raise AssertionError("monitor stream never subscribed to the event bus")
 
 
 async def stop(task: asyncio.Task) -> None:
@@ -779,6 +797,51 @@ class TestMonitorSocket:
         [ping] = socket.frames_of_type("ping")
         assert "at" in ping
 
+    async def test_deactivating_the_user_closes_a_long_lived_stream(
+        self, session: AsyncSession, supervisor: User, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A busy or quiet channel both re-check the user on an interval.
+
+        Without this, a token that stays cryptographically valid for its full
+        TTL would keep streaming to a supervisor who was deactivated mid-shift.
+        """
+        monkeypatch.setattr(monitor_api, "KEEPALIVE_SECONDS", 0.01)
+        monkeypatch.setattr(monitor_api, "REAUTH_INTERVAL_SECONDS", 0.03)
+        socket = FakeWebSocket()
+
+        task = await run_stream(socket, token_for(supervisor), None)
+        # Let at least one ping land while the user is still active.
+        await asyncio.wait_for(socket.received.wait(), timeout=2)
+        assert socket.closed is None
+
+        supervisor.is_active = False
+        await session.flush()
+
+        for _ in range(500):
+            if socket.closed is not None:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            raise AssertionError("stream was never closed after the user was deactivated")
+
+        assert socket.closed[0] == 1008
+        await stop(task)
+
+    async def test_reauth_does_not_disturb_a_still_active_user(
+        self, session: AsyncSession, supervisor: User, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(monitor_api, "KEEPALIVE_SECONDS", 0.01)
+        monkeypatch.setattr(monitor_api, "REAUTH_INTERVAL_SECONDS", 0.02)
+        socket = FakeWebSocket()
+
+        task = await run_stream(socket, token_for(supervisor), None)
+        # Outlast several reauth intervals; the user never changes.
+        await asyncio.sleep(0.15)
+        await stop(task)
+
+        assert socket.closed is None
+        assert len(socket.frames_of_type("ping")) >= 2
+
     async def test_a_token_with_an_unparseable_subject_is_rejected(
         self, session: AsyncSession, supervisor: User
     ) -> None:
@@ -825,7 +888,7 @@ class TestMonitorSocket:
 
         socket = DisconnectingWebSocket()
         task = asyncio.create_task(monitor_api.stream(socket, token_for(supervisor), None))
-        await asyncio.sleep(0)
+        await wait_subscribed()
         await emit(EventType.CALL_STARTED, business.id, call_id=uuid.uuid4())
         await asyncio.wait_for(task, timeout=2)
 
@@ -842,7 +905,7 @@ class TestMonitorSocket:
 
         socket = ExplodingWebSocket()
         task = asyncio.create_task(monitor_api.stream(socket, token_for(supervisor), None))
-        await asyncio.sleep(0)
+        await wait_subscribed()
         await emit(EventType.CALL_STARTED, business.id, call_id=uuid.uuid4())
         await asyncio.wait_for(task, timeout=2)
 
@@ -860,7 +923,7 @@ class TestMonitorSocket:
 
         socket = AlreadyGoneWebSocket()
         task = asyncio.create_task(monitor_api.stream(socket, token_for(supervisor), None))
-        await asyncio.sleep(0)
+        await wait_subscribed()
 
         # Must not raise even though both the send and the close attempt fail.
         await emit(EventType.CALL_STARTED, business.id, call_id=uuid.uuid4())

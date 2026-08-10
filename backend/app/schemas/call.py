@@ -16,9 +16,11 @@ from app.models.enums import (
     HandoffStatus,
     Language,
     PhoneNumberStatus,
+    QualityGrade,
     Sentiment,
     SpeakerRole,
     TelephonyProvider,
+    VoicemailStatus,
 )
 from app.schemas.common import ORMModel, normalize_phone
 
@@ -188,6 +190,68 @@ class RecordingUrlOut(BaseModel):
     expires_in: int
     encrypted: bool
     note: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Call quality
+# --------------------------------------------------------------------------- #
+class QualitySampleRequest(BaseModel):
+    """One media-quality reading posted by the edge while a call is live."""
+
+    latency_ms: Annotated[int, Field(ge=0, le=60_000)]
+    jitter_ms: Annotated[float, Field(ge=0.0, le=10_000.0)]
+    packet_loss_pct: Annotated[float, Field(ge=0.0, le=100.0)]
+    mos_score: Annotated[float | None, Field(default=None, ge=1.0, le=5.0)] = None
+    source: Annotated[str, Field(max_length=40)] = "media_edge"
+    sampled_at: datetime | None = None
+
+
+class QualitySampleOut(ORMModel):
+    id: uuid.UUID
+    call_id: uuid.UUID
+    sampled_at: datetime
+    latency_ms: int
+    jitter_ms: float
+    packet_loss_pct: float
+    mos_score: float | None
+    grade: QualityGrade
+    source: str
+
+
+class QualitySummaryOut(BaseModel):
+    """Rolled-up quality for a call, for the transcript and the live board."""
+
+    call_id: uuid.UUID
+    sample_count: int
+    avg_latency_ms: float | None
+    max_latency_ms: int | None
+    avg_jitter_ms: float | None
+    max_jitter_ms: float | None
+    avg_packet_loss_pct: float | None
+    max_packet_loss_pct: float | None
+    worst_grade: QualityGrade | None
+
+
+# --------------------------------------------------------------------------- #
+# Voicemail
+# --------------------------------------------------------------------------- #
+class VoicemailOut(ORMModel):
+    id: uuid.UUID
+    business_id: uuid.UUID
+    call_id: uuid.UUID
+    phone_number_id: uuid.UUID | None
+    caller_number: str
+    duration_sec: int
+    status: VoicemailStatus
+    transcript: str | None
+    transcribed_at: datetime | None
+    listened_at: datetime | None
+    is_unheard: bool
+    created_at: datetime
+
+
+class VoicemailTranscriptRequest(BaseModel):
+    transcript: Annotated[str, Field(min_length=1, max_length=8000)]
 
 
 # --------------------------------------------------------------------------- #

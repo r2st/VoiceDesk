@@ -21,7 +21,7 @@ from app.core.security import verify_webhook_signature
 from app.models.call import CallLog
 from app.models.enums import CallStatus
 from app.schemas.call import WebhookAck
-from app.services import call_service, recording_service
+from app.services import call_service, recording_service, voicemail_service
 from app.services.telephony import WebhookEvent, get_provider
 
 logger = get_logger(__name__)
@@ -118,7 +118,10 @@ async def telephony_webhook(
     # a terminal status we have already applied. Gating on the status made that
     # the one callback we ignored, and the recording was lost for good.
     if event.recording_url:
-        await _ingest_recording(session, call, event.recording_url, provider_name)
+        if event.is_voicemail:
+            await _ingest_voicemail(session, call, event.recording_url, provider_name)
+        else:
+            await _ingest_recording(session, call, event.recording_url, provider_name)
 
     return WebhookAck(call_id=call.id, status=CallStatus(call.status), duplicate=duplicate)
 
@@ -159,3 +162,15 @@ async def _ingest_recording(session: AsyncSession, call: CallLog, url: str, prov
         await recording_service.ingest_from_provider_url(session, call, url)
     except Exception as exc:
         logger.warning("Recording ingest failed for call %s from %s: %s", call.id, provider, exc)
+
+
+async def _ingest_voicemail(session: AsyncSession, call: CallLog, url: str, provider: str) -> None:
+    """Pull a caller's voicemail message into our own encrypted bucket.
+
+    Never fails the webhook: a stuck voicemail is a support ticket, but a 500
+    here would mean the provider retries the whole callback indefinitely.
+    """
+    try:
+        await voicemail_service.ingest_from_provider_url(session, call, url)
+    except Exception as exc:
+        logger.warning("Voicemail ingest failed for call %s from %s: %s", call.id, provider, exc)

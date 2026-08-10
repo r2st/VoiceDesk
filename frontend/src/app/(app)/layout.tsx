@@ -12,6 +12,7 @@ const NAV = [
   { href: "/dashboard", label: "Overview" },
   { href: "/monitor", label: "Live" },
   { href: "/calls", label: "Calls" },
+  { href: "/voicemails", label: "Voicemails" },
   { href: "/leads", label: "Leads" },
   { href: "/appointments", label: "Bookings" },
   { href: "/agents", label: "Agents" },

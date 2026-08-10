@@ -24,7 +24,7 @@ from app.models.enums import (
 )
 from app.models.voice_agent import VoiceAgent
 from app.schemas.call import InitiateCallRequest
-from app.services import billing_service, compliance, entitlements
+from app.services import billing_service, compliance, entitlements, routing_service
 from app.services.telephony import CallRequest, WebhookEvent, get_provider
 
 logger = get_logger(__name__)
@@ -202,13 +202,12 @@ async def handle_inbound_call(
     if line is None:
         raise NotFoundError(f"No active VoiceDesk number matches {mask_phone(to_number)}.")
 
-    agent: VoiceAgent | None = None
-    if line.agent_id is not None:
-        agent = (
-            await session.execute(
-                tenant_select(VoiceAgent, line.business_id).where(VoiceAgent.id == line.agent_id)
-            )
-        ).scalar_one_or_none()
+    # Prefer the number's bound agent, but fall back to another available
+    # agent in the business rather than ringing through to one that is paused
+    # or already at its concurrency limit.
+    agent = await routing_service.select_available_agent(
+        session, line.business_id, preferred_agent_id=line.agent_id
+    )
 
     existing = await find_by_provider_call_id(session, provider, provider_call_id)
     if existing is not None:
@@ -218,6 +217,12 @@ async def handle_inbound_call(
     # tenant whose trial lapses mid-call starts rejecting the webhook replays
     # for the call already in progress.
     await entitlements.require_calling_entitlement(session, line.business_id)
+
+    metadata: dict[str, Any] = {"state": {"turn_index": 0}, "provider_raw": raw or {}}
+    if agent is None:
+        # No agent could take this call — flag it so the media edge and the
+        # dashboard know to offer voicemail rather than dead air.
+        metadata["routing"] = {"reason": "no_agent_available", "voicemail_recommended": True}
 
     call = CallLog(
         business_id=line.business_id,
@@ -230,7 +235,7 @@ async def handle_inbound_call(
         provider=provider,
         provider_call_id=provider_call_id or None,
         started_at=datetime.now(UTC),
-        metadata_json={"state": {"turn_index": 0}, "provider_raw": raw or {}},
+        metadata_json=metadata,
     )
     session.add(call)
     await session.flush()

@@ -58,6 +58,9 @@ class WebhookEvent:
     call_id: str | None = None
     duration_sec: int = 0
     recording_url: str | None = None
+    #: True when ``recording_url`` is a caller's voicemail message rather than
+    #: the recording of an answered call.
+    is_voicemail: bool = False
     from_number: str | None = None
     to_number: str | None = None
     error_code: str | None = None

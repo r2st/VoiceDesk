@@ -97,9 +97,11 @@ async def create_agent(
         flow_json=flow_json,
         flow_version=1,
         max_call_duration_sec=payload.max_call_duration_sec,
+        max_concurrent_calls=payload.max_concurrent_calls,
         handoff_confidence_threshold=payload.handoff_confidence_threshold,
         whatsapp_handoff_enabled=payload.whatsapp_handoff_enabled,
         recording_enabled=payload.recording_enabled,
+        voicemail_enabled=payload.voicemail_enabled,
     )
     session.add(agent)
     await session.flush()
@@ -263,9 +265,11 @@ async def duplicate_agent(
         flow_json=dict(source.flow_json or {}),
         flow_version=1,
         max_call_duration_sec=source.max_call_duration_sec,
+        max_concurrent_calls=source.max_concurrent_calls,
         handoff_confidence_threshold=source.handoff_confidence_threshold,
         whatsapp_handoff_enabled=source.whatsapp_handoff_enabled,
         recording_enabled=source.recording_enabled,
+        voicemail_enabled=source.voicemail_enabled,
     )
     session.add(clone)
     await session.flush()

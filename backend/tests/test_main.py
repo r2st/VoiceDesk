@@ -28,7 +28,7 @@ class TestHealth:
         monkeypatch.setattr(fake_redis, "ping", broken_ping)
 
         response = await client.get("/health/ready")
-        assert response.status_code == 200
+        assert response.status_code == 503
         body = response.json()
         assert body["status"] == "degraded"
         assert body["checks"]["redis"].startswith("error: ConnectionError")
@@ -43,7 +43,7 @@ class TestHealth:
         monkeypatch.setattr(session, "execute", broken_execute)
 
         response = await client.get("/health/ready")
-        assert response.status_code == 200
+        assert response.status_code == 503
         body = response.json()
         assert body["status"] == "degraded"
         assert body["checks"]["database"].startswith("error: RuntimeError")

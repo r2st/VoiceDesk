@@ -1,0 +1,20 @@
+[Unit]
+Description=VoiceDesk application stack (docker compose)
+Documentation=https://github.com/voicedesk/voicedesk/tree/main/deploy
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/voicedesk/deploy
+ExecStart=/usr/bin/docker compose -f docker-compose.prod.yml --env-file .env up -d --remove-orphans
+ExecStop=/usr/bin/docker compose -f docker-compose.prod.yml --env-file .env down
+# Building images and pulling postgres/redis/minio on a cold cache can take a
+# few minutes on a small VPS; the default 90s would kill a healthy first boot.
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

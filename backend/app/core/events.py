@@ -33,6 +33,9 @@ CHANNEL_PREFIX = "voicedesk:events:"
 #: send a keepalive and notice that its client has gone away.
 POLL_INTERVAL_SECONDS = 0.5
 
+#: Backoff between resubscribe attempts after a broken Redis connection.
+RECONNECT_BACKOFF_SECONDS = 1.0
+
 
 class EventType:
     """Event names on the wire. Clients switch on these, so they are stable."""
@@ -44,6 +47,9 @@ class EventType:
     TAKEOVER_STARTED = "takeover.started"
     TAKEOVER_ENDED = "takeover.ended"
     HANDOFF = "call.handoff"
+    QUALITY_SAMPLE = "call.quality_sample"
+    QUALITY_DEGRADED = "call.quality_degraded"
+    VOICEMAIL_RECEIVED = "voicemail.received"
 
 
 @dataclass(slots=True)
@@ -109,13 +115,32 @@ class RedisEventBus:
             logger.warning("Dropping live event %s: %s", event.type, exc)
 
     async def subscribe(self, business_id: uuid.UUID) -> AsyncIterator[LiveEvent]:
-        pubsub = get_redis().pubsub()
-        await pubsub.subscribe(channel_for(business_id))
+        """Yield this tenant's events, reconnecting through transient Redis blips.
+
+        A dropped Redis connection used to propagate straight out of this
+        generator, which meant every dashboard watching this tenant lost its
+        socket the moment Redis hiccuped. Instead this resubscribes with a
+        short backoff and keeps the caller's WebSocket open — a supervisor
+        sees a brief gap in the feed rather than a reconnect.
+        """
+        channel = channel_for(business_id)
+        pubsub = await self._resubscribe(channel)
         try:
             while True:
-                message = await pubsub.get_message(
-                    ignore_subscribe_messages=True, timeout=POLL_INTERVAL_SECONDS
-                )
+                try:
+                    message = await pubsub.get_message(
+                        ignore_subscribe_messages=True, timeout=POLL_INTERVAL_SECONDS
+                    )
+                except Exception as exc:  # pragma: no cover - depends on Redis being down
+                    logger.warning("Live event subscription to %s dropped: %s", channel, exc)
+                    try:
+                        await pubsub.aclose()
+                    except Exception:
+                        pass
+                    await asyncio.sleep(RECONNECT_BACKOFF_SECONDS)
+                    pubsub = await self._resubscribe(channel)
+                    continue
+
                 if message is None:
                     continue
                 try:
@@ -125,8 +150,23 @@ class RedisEventBus:
                     # tear down every dashboard watching this tenant.
                     logger.warning("Skipping unreadable live event: %s", exc)
         finally:
-            await pubsub.unsubscribe(channel_for(business_id))
-            await pubsub.aclose()
+            try:
+                await pubsub.unsubscribe(channel)
+                await pubsub.aclose()
+            except Exception:  # pragma: no cover - best-effort cleanup
+                pass
+
+    @staticmethod
+    async def _resubscribe(channel: str):
+        """(Re)establish the pub/sub subscription, retrying until it succeeds."""
+        while True:
+            try:
+                pubsub = get_redis().pubsub()
+                await pubsub.subscribe(channel)
+                return pubsub
+            except Exception as exc:  # pragma: no cover - depends on Redis being down
+                logger.warning("Could not subscribe to %s, retrying: %s", channel, exc)
+                await asyncio.sleep(RECONNECT_BACKOFF_SECONDS)
 
 
 class InMemoryEventBus:

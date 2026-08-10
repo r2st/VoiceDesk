@@ -11,6 +11,7 @@ from app.core.deps import CurrentContext, DbSession, RequireAdmin
 from app.core.errors import ValidationError
 from app.models.enums import AgentStatus
 from app.schemas.agent import (
+    AgentAvailabilityOut,
     FlowUpdate,
     FlowValidationResult,
     VoiceAgentCreate,
@@ -18,7 +19,7 @@ from app.schemas.agent import (
     VoiceAgentUpdate,
 )
 from app.schemas.common import Page
-from app.services import agent_service
+from app.services import agent_service, routing_service
 from app.services.flow import validate_flow
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -55,6 +56,26 @@ async def list_agents(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/availability", response_model=list[AgentAvailabilityOut])
+async def agent_availability(
+    context: CurrentContext, session: DbSession
+) -> list[AgentAvailabilityOut]:
+    """Live routing standing for every agent — who can take the next call."""
+    availabilities = await routing_service.list_agent_availability(session, context.business_id)
+    return [
+        AgentAvailabilityOut(
+            agent_id=a.agent.id,
+            name=a.agent.name,
+            status=AgentStatus(a.agent.status),
+            active_calls=a.active_calls,
+            max_concurrent_calls=a.agent.max_concurrent_calls,
+            is_available=a.is_available,
+            reason=a.reason,
+        )
+        for a in availabilities
+    ]
 
 
 @router.get("/{agent_id}", response_model=VoiceAgentOut)

@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the VoiceDesk Postgres backup nightly
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+# Catches up on a missed run if the VPS was rebooted or the service was
+# down through last night's slot, rather than silently skipping a day.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

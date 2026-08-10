@@ -4,6 +4,9 @@ import { dirname } from "node:path";
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // A self-contained server build (server + only the node_modules it actually
+  // needs) so the production image doesn't ship the whole workspace tree.
+  output: "standalone",
   // Pin the workspace root. Without it Turbopack walks up past the repository
   // and picks up an unrelated lockfile from the home directory.
   turbopack: {

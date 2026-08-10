@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
@@ -58,7 +58,7 @@ def create_app() -> FastAPI:
         return {"status": "ok", "service": "voicedesk-api", "version": app.version}
 
     @app.get("/health/ready", tags=["health"])
-    async def readiness() -> dict:
+    async def readiness(response: Response) -> dict:
         checks = {"database": "unknown", "redis": "unknown"}
         try:
             async with get_sessionmaker()() as session:
@@ -72,6 +72,12 @@ def create_app() -> FastAPI:
         except Exception as exc:
             checks["redis"] = f"error: {type(exc).__name__}"
         healthy = all(v == "ok" for v in checks.values())
+        # A 200 here tells a load balancer or orchestrator this replica can
+        # take traffic. Returning it while the database is unreachable would
+        # keep sending requests to an instance that cannot serve them instead
+        # of routing around it during the outage.
+        if not healthy:
+            response.status_code = 503
         return {"status": "ok" if healthy else "degraded", "checks": checks}
 
     return app
@@ -83,12 +89,14 @@ def _register_routers(app: FastAPI) -> None:
         analytics,
         appointments,
         billing,
+        call_quality,
         calls,
         intents,
         leads,
         monitor,
         phone_numbers,
         recordings,
+        voicemails,
         webhooks,
         whatsapp,
     )
@@ -101,8 +109,10 @@ def _register_routers(app: FastAPI) -> None:
         phone_numbers,
         appointments,
         calls,
+        call_quality,
         leads,
         recordings,
+        voicemails,
         monitor,
         whatsapp,
         analytics,

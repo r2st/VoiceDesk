@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 
 import { api } from "@/lib/api";
 import { useApi } from "@/lib/use-api";
@@ -16,14 +17,19 @@ import {
 } from "@/lib/format";
 import { BarChart, DistributionBars } from "@/components/chart";
 import {
+  Badge,
   Card,
   CardHeader,
   ErrorNotice,
   Spinner,
   StatCard,
 } from "@/components/ui";
+import type { AgentAvailability } from "@/lib/types";
 
 const RANGES = [7, 30, 90] as const;
+
+/** How often the live panels refetch. Cheap lists, no reason for a socket. */
+const LIVE_POLL_MS = 15000;
 
 export default function DashboardPage() {
   const [days, setDays] = useState<number>(30);
@@ -38,6 +44,20 @@ export default function DashboardPage() {
     [days],
   );
   const leaderboard = useApi(() => api.analytics.agents(days), [days]);
+
+  const availability = useApi(() => api.agents.availability(), []);
+  const unheardVoicemails = useApi(
+    () => api.voicemails.list({ unheard_only: true, limit: 1 }),
+    [],
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      availability.reload();
+      unheardVoicemails.reload();
+    }, LIVE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [availability.reload, unheardVoicemails.reload]);
 
   return (
     <div className="mx-auto max-w-6xl">
@@ -141,7 +161,46 @@ export default function DashboardPage() {
         </>
       ) : null}
 
-      <div className="mt-6 grid gap-4 lg:grid-cols-3">
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader
+            title="Team availability"
+            subtitle="Live — who can take the next call"
+          />
+          {availability.error ? (
+            <div className="p-5">
+              <ErrorNotice
+                message={availability.error}
+                onRetry={availability.reload}
+              />
+            </div>
+          ) : availability.loading && !availability.data ? (
+            <div className="p-5">
+              <Spinner />
+            </div>
+          ) : availability.data && availability.data.length > 0 ? (
+            <ul className="divide-y divide-ink-100">
+              {availability.data.map((agent) => (
+                <AvailabilityRow key={agent.agent_id} agent={agent} />
+              ))}
+            </ul>
+          ) : (
+            <p className="px-5 py-10 text-center text-sm text-ink-500">
+              No agents configured yet.
+            </p>
+          )}
+        </Card>
+
+        <Link href="/voicemails" className="block">
+          <StatCard
+            label="Unheard voicemails"
+            value={number(unheardVoicemails.data?.total ?? 0)}
+            hint="Left when nobody could take the call"
+          />
+        </Link>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader
             title="Daily call volume"
@@ -254,5 +313,23 @@ export default function DashboardPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+function AvailabilityRow({ agent }: { agent: AgentAvailability }) {
+  return (
+    <li className="flex items-center justify-between gap-3 px-5 py-3">
+      <div>
+        <p className="text-sm font-medium text-ink-900">{agent.name}</p>
+        <p className="mt-0.5 text-xs text-ink-500">
+          {agent.active_calls} / {agent.max_concurrent_calls} calls
+        </p>
+      </div>
+      <Badge tone={agent.is_available ? "success" : "warning"}>
+        {agent.is_available
+          ? "Available"
+          : titleCase(agent.reason ?? "unavailable")}
+      </Badge>
+    </li>
   );
 }

@@ -136,6 +136,7 @@ class MockTelephonyProvider(TelephonyProvider):
             call_id=payload.get("call_id"),
             duration_sec=int(payload.get("duration_sec") or 0),
             recording_url=payload.get("recording_url"),
+            is_voicemail=bool(payload.get("voicemail")),
             from_number=payload.get("from"),
             to_number=payload.get("to"),
             error_code=payload.get("error_code"),
