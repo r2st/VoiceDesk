@@ -361,6 +361,16 @@ export const api = {
   phoneNumbers: {
     list: (limit = 50, offset = 0) =>
       request<Page<PhoneNumber>>("/phone-numbers", { query: { limit, offset } }),
+    assign: (id: string, agentId: string) =>
+      request<PhoneNumber>(`/phone-numbers/${id}/assign`, {
+        method: "POST",
+        body: { agent_id: agentId },
+      }),
+    unassign: (id: string) =>
+      request<PhoneNumber>(`/phone-numbers/${id}`, {
+        method: "PATCH",
+        body: { agent_id: null },
+      }),
   },
 
   billing: {
