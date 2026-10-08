@@ -42,3 +42,7 @@ pnpm-debug.log*
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Environment
+.env*
+!.env.example
